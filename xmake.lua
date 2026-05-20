@@ -4,9 +4,10 @@ target("spirv-tools")
     })
 
     -- SPIRV-Headers (for spirv/unified1/*.h)
-    add_includedirs(".", "include","external/spirv-headers/include", "external/spirv-headers/include/spirv/unified1", {
+    add_includedirs(".", "include", {
         public = true
     })
+    add_deps('spirv-headers')
     -- Generated .inc files (build-version.inc, core_tables_*.inc, generators.inc, etc.)
     add_includedirs("build_generated")
 

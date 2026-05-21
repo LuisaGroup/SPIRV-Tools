@@ -13,6 +13,13 @@ target("spirv-tools")
     before_build(function(target)
         local script_dir = os.scriptdir()
         local out_dir = path.join(script_dir, "build_generated")
+        -- Skip if generated files already exist
+        if os.isfile(path.join(out_dir, "build-version.inc")) and
+           os.isfile(path.join(out_dir, "generators.inc")) and
+           os.isfile(path.join(out_dir, "core_tables_body.inc")) and
+           os.isfile(path.join(out_dir, "core_tables_header.inc")) then
+            return
+        end
         os.mkdir(out_dir)
         -- Find Python
         local python = nil

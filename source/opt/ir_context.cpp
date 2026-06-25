@@ -973,10 +973,14 @@ void IRContext::AddCalls(const Function* func, std::queue<uint32_t>* todo) {
     for (auto ii = bi->begin(); ii != bi->end(); ++ii) {
       if (ii->opcode() == spv::Op::OpFunctionCall)
         todo->push(ii->GetSingleWordInOperand(0));
-      if (ii->opcode() == spv::Op::OpCooperativeMatrixPerElementOpNV)
-        todo->push(ii->GetSingleWordInOperand(1));
-      if (ii->opcode() == spv::Op::OpCooperativeMatrixReduceNV)
-        todo->push(ii->GetSingleWordInOperand(2));
+      if (ii->opcode() == spv::Op::OpCooperativeMatrixPerElementOpNV) {
+        auto id = ii->GetSingleWordInOperand(1);
+        if (GetFunction(id)) todo->push(id);
+      }
+      if (ii->opcode() == spv::Op::OpCooperativeMatrixReduceNV) {
+        auto id = ii->GetSingleWordInOperand(2);
+        if (GetFunction(id)) todo->push(id);
+      }
       if (ii->opcode() == spv::Op::OpCooperativeMatrixLoadTensorNV) {
         const auto memory_operands_index = 3;
         auto mask = ii->GetSingleWordInOperand(memory_operands_index);
@@ -995,12 +999,14 @@ void IRContext::AddCalls(const Function* func, std::queue<uint32_t>* todo) {
           ++count;
 
         if (mask & uint32_t(spv::TensorAddressingOperandsMask::DecodeFunc)) {
-          todo->push(ii->GetSingleWordInOperand(tensor_operands_index + count));
+          auto id = ii->GetSingleWordInOperand(tensor_operands_index + count);
+          if (GetFunction(id)) todo->push(id);
           ++count;
         }
         if (mask &
             uint32_t(spv::TensorAddressingOperandsMask::DecodeVectorFunc)) {
-          todo->push(ii->GetSingleWordInOperand(tensor_operands_index + count));
+          auto id = ii->GetSingleWordInOperand(tensor_operands_index + count);
+          if (GetFunction(id)) todo->push(id);
         }
       }
     }

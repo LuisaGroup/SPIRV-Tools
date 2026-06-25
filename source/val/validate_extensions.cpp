@@ -32,6 +32,7 @@
 #include "source/val/validate.h"
 #include "source/val/validation_state.h"
 #include "spirv-tools/libspirv.h"
+#include "spirv/unified1/ArmExperimentalMLOperations.h"
 #include "spirv/unified1/NonSemanticClspvReflection.h"
 #include "spirv/unified1/NonSemanticGraphDebugInfo.h"
 #include "spirv/unified1/NonSemanticShaderDebugInfo.h"
@@ -395,9 +396,13 @@ spv_result_t ValidateOperandDebugType(ValidationState_t& _,
   // Check for common types.
   std::function<bool(CommonDebugInfoInstructions)> expectation =
       [&allow_template_param](CommonDebugInfoInstructions dbg_inst) {
+        // TODO - Should DebugTypeTemplateParameterPack be allowed?
         if (allow_template_param &&
             (dbg_inst == CommonDebugInfoDebugTypeTemplateParameter ||
              dbg_inst == CommonDebugInfoDebugTypeTemplateTemplateParameter)) {
+          return true;
+        } else if (dbg_inst == CommonDebugInfoDebugInfoNone) {
+          // DebugInfoNone is a safe "null" type that can be used
           return true;
         }
         return CommonDebugInfoDebugTypeBasic <= dbg_inst &&
@@ -1344,6 +1349,7 @@ spv_result_t ValidateExtension(ValidationState_t& _, const Instruction* inst) {
   if (_.version() < SPV_SPIRV_VERSION_WORD(1, 4)) {
     if (extension ==
             ExtensionToString(kSPV_KHR_workgroup_memory_explicit_layout) ||
+        extension == ExtensionToString(kSPV_KHR_opacity_micromap) ||
         extension == ExtensionToString(kSPV_EXT_mesh_shader) ||
         extension == ExtensionToString(kSPV_NV_shader_invocation_reorder) ||
         extension == ExtensionToString(kSPV_EXT_shader_invocation_reorder) ||
@@ -1428,6 +1434,27 @@ spv_result_t ValidateExtInstImport(ValidationState_t& _,
     if (!_.HasExtension(kSPV_ARM_graph)) {
       return _.diag(SPV_ERROR_INVALID_DATA, inst)
              << "NonSemantic.Graph.DebugInfo requires SPV_ARM_graph";
+    }
+  }
+
+  const std::string arm_ml_ops_prefix = "Arm.ExperimentalMLOperations.";
+  if (name.find(arm_ml_ops_prefix) == 0) {
+    auto version_string = name.substr(arm_ml_ops_prefix.size());
+    if (version_string.empty()) {
+      return _.diag(SPV_ERROR_INVALID_DATA, inst)
+             << "Missing Arm.ExperimentalMLOperations import version";
+    }
+    char* end_ptr;
+    uint32_t ver = static_cast<uint32_t>(
+        std::strtoul(version_string.c_str(), &end_ptr, 10));
+    if (end_ptr && *end_ptr != '\0') {
+      return _.diag(SPV_ERROR_INVALID_DATA, inst)
+             << "Arm.ExperimentalMLOperations import does not encode the "
+                "version correctly";
+    }
+    if (ver == 0 || ver > ArmExperimentalMLOperationsRevision) {
+      return _.diag(SPV_ERROR_INVALID_DATA, inst)
+             << "Unknown Arm.ExperimentalMLOperations import version";
     }
   }
 

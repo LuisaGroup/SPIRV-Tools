@@ -14,6 +14,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <unordered_set>
+
 #include "source/opcode.h"
 #include "source/spirv_target_env.h"
 #include "source/val/instruction.h"
@@ -53,9 +55,10 @@ bool IsMemberDecorationOnly(spv::Decoration dec) {
     case spv::Decoration::RowMajor:
     case spv::Decoration::ColMajor:
     case spv::Decoration::MatrixStride:
-      // SPIR-V spec bug? Offset is generated on variables when dealing with
-      // transform feedback.
-      // case spv::Decoration::Offset:
+    // Spec ambiguity where this is allowed or not currently
+    // See https://gitlab.khronos.org/spirv/SPIR-V/-/issues/937
+    // case spv::Decoration::Offset:
+    case spv::Decoration::OffsetIdEXT:
       return true;
     default:
       break;
@@ -402,10 +405,15 @@ spv_result_t ValidateDecorateId(ValidationState_t& _, const Instruction* inst) {
         }
       }
 
-      // Strip array and should be the descriptor type
+      const auto is_descriptor_type = [&_](const Instruction* type_inst) {
+        return _.IsDescriptorType(type_inst->opcode());
+      };
+
+      // Strip the array. The element may be a descriptor type directly, or a
+      // composite containing a descriptor type.
       const uint32_t element_type =
           _.FindDef(target_id)->GetOperandAs<uint32_t>(1);
-      if (!_.IsDescriptorType(element_type)) {
+      if (!_.ContainsType(element_type, is_descriptor_type, true)) {
         return _.diag(SPV_ERROR_INVALID_ID, inst)
                << "ArrayStrideIdEXT decoration must only be applied to"
                << " array type containing a Descriptor type.";
@@ -427,11 +435,12 @@ spv_result_t ValidateDecorateId(ValidationState_t& _, const Instruction* inst) {
     }
   }
 
-  // No member decorations take id parameters, so we don't bother checking if
-  // we are using a member only decoration here.
+  if (IsMemberDecorationOnly(decoration)) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << _.SpvDecorationString(decoration)
+           << " can only be applied to structure members";
+  }
 
-  // TODO: Add validations for these decorations.
-  // UniformId is covered elsewhere.
   return SPV_SUCCESS;
 }
 
@@ -541,6 +550,7 @@ spv_result_t ValidateGroupDecorate(ValidationState_t& _,
            << "OpGroupDecorate Decoration group <id> "
            << _.getIdName(decoration_group_id) << " is not a decoration group.";
   }
+  std::unordered_set<uint32_t> seen;
   for (unsigned i = 1; i < inst->operands().size(); ++i) {
     auto target_id = inst->GetOperandAs<uint32_t>(i);
     auto target = _.FindDef(target_id);
@@ -548,6 +558,10 @@ spv_result_t ValidateGroupDecorate(ValidationState_t& _,
       return _.diag(SPV_ERROR_INVALID_ID, inst)
              << "OpGroupDecorate may not target OpDecorationGroup <id> "
              << _.getIdName(target_id);
+    }
+    if (!seen.insert(target_id).second) {
+      return _.diag(SPV_ERROR_INVALID_ID, inst)
+             << "Targets contains duplicate id " << _.getIdName(target_id);
     }
   }
   return SPV_SUCCESS;

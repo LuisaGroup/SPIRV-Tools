@@ -337,8 +337,6 @@ macro(spvtools_pch SRCS PCHPREFIX)
   endif()
 endmacro(spvtools_pch)
 
-add_subdirectory(external)
-
 # Warning about extra semi-colons.
 #
 # This is not supported on all compilers/versions. so enabling only

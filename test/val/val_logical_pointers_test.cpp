@@ -2451,6 +2451,37 @@ TEST_F(ValidateLogicalPointersTest, RecursiveCalls) {
   EXPECT_EQ(SPV_SUCCESS, ValidateInstructions());
 }
 
+TEST_F(ValidateLogicalPointersTest, UntypedGroupAsyncCopyKHRLogicalPointer) {
+  const std::string spirv = R"(
+OpCapability Shader
+OpCapability UntypedPointersKHR
+OpExtension "SPV_KHR_untyped_pointers"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%int = OpTypeInt 32 0
+%int_0 = OpConstant %int 0
+%int_1 = OpConstant %int 1
+%int_2 = OpConstant %int 2
+%int_4 = OpConstant %int 4
+%array = OpTypeArray %int %int_1
+%ptr_wg = OpTypeUntypedPointerKHR Workgroup
+%var = OpUntypedVariableKHR %ptr_wg Workgroup %array
+%void_fn = OpTypeFunction %void
+%main = OpFunction %void None %void_fn
+%entry = OpLabel
+%src = OpUntypedAccessChainKHR %ptr_wg %array %var %int_0
+%dst = OpUntypedAccessChainKHR %ptr_wg %array %var %int_0
+%copy = OpUntypedGroupAsyncCopyKHR %int %int_2 %dst %src %int_4 %int_1 %int_4 %int_0
+OpReturn
+OpFunctionEnd
+)";
+
+  CompileSuccessfully(spirv, SPV_ENV_UNIVERSAL_1_5);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_UNIVERSAL_1_5));
+}
+
 }  // namespace
 }  // namespace val
 }  // namespace spvtools

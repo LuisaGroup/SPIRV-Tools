@@ -162,6 +162,7 @@ spv_result_t ValidateLogicalPointerOperands(ValidationState_t& _,
     case spv::Op::OpUntypedArrayLengthKHR:
     case spv::Op::OpUntypedAccessChainKHR:
     case spv::Op::OpUntypedInBoundsAccessChainKHR:
+    case spv::Op::OpUntypedGroupAsyncCopyKHR:
     case spv::Op::OpCopyMemorySized:
     // Cooperative matrix KHR/NV
     case spv::Op::OpCooperativeMatrixLoadKHR:

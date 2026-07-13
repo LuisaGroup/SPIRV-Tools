@@ -174,7 +174,7 @@ bool InferAddressSpacesPass::PropagateStorageClass(Instruction* cast_inst) {
 
         if (user->GetSingleWordInOperand(base_operand_idx) != cast_result_id) {
           // This access chain uses the cast indirectly; skip.
-          return modified;
+          continue;
         }
 
         // Change the base pointer to the source pointer.

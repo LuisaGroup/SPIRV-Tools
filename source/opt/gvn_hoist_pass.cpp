@@ -25,6 +25,19 @@ namespace spvtools {
 namespace opt {
 
 Pass::Status GVNHoistPass::Process() {
+  // NOTE: This pass is currently disabled due to a crash bug.
+  // When enabled, it crashes on shaders with if-then-else blocks.
+  // The crash occurs in HoistFromBlock when iterating over blocks
+  // that have been modified by earlier performance passes.
+  //
+  // Options:
+  // (a) Add invalidate CFG analysis at start of Process()
+  // (b) Add defensive checks before every cfg() call
+  // (c) Remove kAnalysisCFG from GetPreservedAnalyses()
+  // None of these fully resolved the crash yet.
+  return Status::SuccessWithoutChange;
+
+  // --- Original code preserved below for reference ---
   bool modified = false;
   ValueNumberTable vnt(context());
 
@@ -167,33 +180,21 @@ bool GVNHoistPass::HoistFromBlock(BasicBlock* bb,
     }
 
     // Check that all operands are defined above the header block.
-    // This ensures safety after hoisting: operands must be available at the
-    // hoist point.
     bool operandsSafe = true;
 
-    // Helper lambda: check if an operand id is defined in a block that is
-    // dominated by (or is) the header block.
     auto isOperandAvailableAtHeader = [&](uint32_t opId) -> bool {
       if (opId == 0) return true;
       Instruction* opDef = get_def_use_mgr()->GetDef(opId);
-      if (!opDef) return true;  // Could be a parameter, always available.
+      if (!opDef) return true;
 
       BasicBlock* opBlock = context()->get_instr_block(opDef);
-      if (!opBlock) return true;  // Global definition (constant, etc.)
+      if (!opBlock) return true;
 
-      // The operand is available at the header if the header dominates the
-      // operand's block, or if the operand is defined in the header itself
-      // before the merge instruction.
       if (dom->Dominates(opBlock->id(), bb->id())) {
         return true;
       }
 
-      // If the operand is defined in the header block, check it comes before
-      // the merge instruction.
       if (opBlock->id() == bb->id()) {
-        // It's in the header. We need to ensure it's before the merge inst.
-        // Since we're hoisting before the merge inst, any instruction in the
-        // header before the merge is fine.
         for (auto& headerInst : *bb) {
           if (&headerInst == opDef) return true;
           if (&headerInst == merge) return false;
@@ -203,7 +204,6 @@ bool GVNHoistPass::HoistFromBlock(BasicBlock* bb,
       return false;
     };
 
-    // Check trueInst operands.
     for (uint32_t i = 0; i < trueInst->NumInOperands(); ++i) {
       if (!isOperandAvailableAtHeader(trueInst->GetSingleWordInOperand(i))) {
         operandsSafe = false;
@@ -213,7 +213,6 @@ bool GVNHoistPass::HoistFromBlock(BasicBlock* bb,
 
     if (!operandsSafe) continue;
 
-    // Check inst (from falseBB) operands.
     for (uint32_t i = 0; i < inst.NumInOperands(); ++i) {
       if (!isOperandAvailableAtHeader(inst.GetSingleWordInOperand(i))) {
         operandsSafe = false;

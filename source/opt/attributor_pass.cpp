@@ -164,22 +164,53 @@ Pass::Status AttributorPass::Process() {
     uint32_t varId = varInst->result_id();
     spv::StorageClass sc = GetVariableStorageClass(varInst, def_use_mgr);
 
-    // Only process interesting storage classes
+    // Only process storage classes where NonWritable/NonReadable are valid.
+    // Per SPIR-V spec, NonWritable must target a storage image, tensor in
+    // UniformConstant, uniform block, or storage buffer.
+    // NonReadable must not be applied to objects in Input/Output storage class.
+    // PushConstant, Input, Output, and others are excluded.
     if (sc != spv::StorageClass::Uniform &&
         sc != spv::StorageClass::UniformConstant &&
-        sc != spv::StorageClass::StorageBuffer &&
-        sc != spv::StorageClass::PushConstant &&
-        sc != spv::StorageClass::Input) {
+        sc != spv::StorageClass::StorageBuffer) {
       continue;
     }
 
-    // Check if already has the target decorations
-    bool hasNonWritable = dec_mgr->FindDecoration(
-        varId, uint32_t(spv::Decoration::NonWritable),
-        [](const Instruction&) { return true; });
-    bool hasNonReadable = dec_mgr->FindDecoration(
-        varId, uint32_t(spv::Decoration::NonReadable),
-        [](const Instruction&) { return true; });
+		// Check if already has the target decorations
+		bool hasNonWritable = dec_mgr->FindDecoration(
+		    varId, uint32_t(spv::Decoration::NonWritable),
+		    [](const Instruction&) { return true; });
+		bool hasNonReadable = dec_mgr->FindDecoration(
+		    varId, uint32_t(spv::Decoration::NonReadable),
+		    [](const Instruction&) { return true; });
+
+		// For UniformConstant storage class, NonWritable is only valid on
+		// storage images (OpTypeImage with Sampled=2). Regular sampled images
+		// (Sampled=1), samplers, and other UniformConstant types cannot have
+		// NonWritable per the SPIR-V spec.
+		if (sc == spv::StorageClass::UniformConstant && !hasNonWritable) {
+		  const uint32_t varTypeId = varInst->type_id();
+		  const Instruction* varTypeInst = def_use_mgr->GetDef(varTypeId);
+		  uint32_t pointeeTypeId = 0;
+		  if (varTypeInst && varTypeInst->opcode() == spv::Op::OpTypePointer) {
+		    pointeeTypeId = varTypeInst->GetSingleWordInOperand(1);
+		  }
+		  Instruction* pointeeTypeInst = def_use_mgr->GetDef(pointeeTypeId);
+	    if (pointeeTypeInst &&
+	        pointeeTypeInst->opcode() == spv::Op::OpTypeImage) {
+	      // OpTypeImage operand 3 is the Sampled parameter.
+	      // 1 = sampled image, 2 = storage image.
+	      uint32_t sampled = pointeeTypeInst->GetSingleWordInOperand(3);
+	      if (sampled != 2u) {
+	        // Not a storage image; skip NonWritable for this variable.
+	        // We can still add NonReadable if there are only stores.
+	        hasNonWritable = true;  // Pretend already has it to skip adding
+	      }
+	    } else if (pointeeTypeInst) {
+	      // Non-image type in UniformConstant (e.g., sampler) - cannot have
+	      // NonWritable.
+	      hasNonWritable = true;
+	    }
+	  }
 
     // Skip if both decorations already present
     if (hasNonWritable && hasNonReadable) continue;

@@ -15,6 +15,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   fix_func_call_arguments.h
   aggressive_dead_code_elim_pass.h
   amd_ext_to_khr.h
+  attributor_pass.h
   analyze_live_input_pass.h
   basic_block.h
   block_merge_pass.h
@@ -26,6 +27,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   code_sink.h
   combine_access_chains.h
   compact_ids_pass.h
+  constraint_elimination_pass.h
   composite.h
   const_folding_rules.h
   constants.h
@@ -58,10 +60,14 @@ set(SPIRV_TOOLS_OPT_SOURCES
   folding_rules.h
   fold_spec_constant_op_and_composite_pass.h
   freeze_spec_constant_value_pass.h
+  function_specialization_pass.h
   function.h
   graph.h
   graphics_robust_access_pass.h
+  gvn_hoist_pass.h
   if_conversion.h
+  infer_address_spaces_pass.h
+  infer_alignment_pass.h
   inline_exhaustive_pass.h
   inline_opaque_pass.h
   inline_pass.h
@@ -77,6 +83,9 @@ set(SPIRV_TOOLS_OPT_SOURCES
   licm_pass.h
   legalize_multidim_array_pass.h
   liveness.h
+  licm_pass.h
+  load_combine_pass.h
+  load_store_motion_pass.h
   local_access_chain_convert_pass.h
   local_redundancy_elimination.h
   local_single_block_elim_pass.h
@@ -85,12 +94,15 @@ set(SPIRV_TOOLS_OPT_SOURCES
   loop_dependence.h
   loop_descriptor.h
   loop_fission.h
+  loop_flatten_pass.h
   loop_fusion.h
   loop_fusion_pass.h
+  loop_reroll_pass.h
   loop_peeling.h
   loop_unroller.h
   loop_utils.h
   loop_unswitch_pass.h
+  mem_dependence_util.h
   mem_pass.h
   merge_return_pass.h
   modify_maximal_reconvergence.h
@@ -106,6 +118,8 @@ set(SPIRV_TOOLS_OPT_SOURCES
   reflect.h
   register_pressure.h
   relax_float_ops_pass.h
+  call_site_splitting_pass.h
+  called_value_propagation_pass.h
   canonicalize_ids_pass.h
   remove_dontinline_pass.h
   remove_duplicates_pass.h
@@ -140,6 +154,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   fix_func_call_arguments.cpp
   aggressive_dead_code_elim_pass.cpp
   amd_ext_to_khr.cpp
+  attributor_pass.cpp
   analyze_live_input_pass.cpp
   basic_block.cpp
   block_merge_pass.cpp
@@ -151,6 +166,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   code_sink.cpp
   combine_access_chains.cpp
   compact_ids_pass.cpp
+  constraint_elimination_pass.cpp
   composite.cpp
   const_folding_rules.cpp
   constants.cpp
@@ -182,10 +198,14 @@ set(SPIRV_TOOLS_OPT_SOURCES
   folding_rules.cpp
   fold_spec_constant_op_and_composite_pass.cpp
   freeze_spec_constant_value_pass.cpp
+  function_specialization_pass.cpp
   function.cpp
   graph.cpp
   graphics_robust_access_pass.cpp
+  gvn_hoist_pass.cpp
   if_conversion.cpp
+  infer_address_spaces_pass.cpp
+  infer_alignment_pass.cpp
   inline_exhaustive_pass.cpp
   inline_opaque_pass.cpp
   inline_pass.cpp
@@ -200,6 +220,9 @@ set(SPIRV_TOOLS_OPT_SOURCES
   licm_pass.cpp
   legalize_multidim_array_pass.cpp
   liveness.cpp
+  licm_pass.cpp
+  load_combine_pass.cpp
+  load_store_motion_pass.cpp
   local_access_chain_convert_pass.cpp
   local_redundancy_elimination.cpp
   local_single_block_elim_pass.cpp
@@ -208,8 +231,10 @@ set(SPIRV_TOOLS_OPT_SOURCES
   loop_dependence_helpers.cpp
   loop_descriptor.cpp
   loop_fission.cpp
+  loop_flatten_pass.cpp
   loop_fusion.cpp
   loop_fusion_pass.cpp
+  loop_reroll_pass.cpp
   loop_peeling.cpp
   loop_utils.cpp
   loop_unroller.cpp
@@ -227,6 +252,8 @@ set(SPIRV_TOOLS_OPT_SOURCES
   redundancy_elimination.cpp
   register_pressure.cpp
   relax_float_ops_pass.cpp
+  call_site_splitting_pass.cpp
+  called_value_propagation_pass.cpp
   canonicalize_ids_pass.cpp
   remove_dontinline_pass.cpp
   remove_duplicates_pass.cpp

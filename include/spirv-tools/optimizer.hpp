@@ -645,6 +645,11 @@ Optimizer::PassToken CreateLoopPeelingPass();
 // Works best after LICM and local multi store elimination pass.
 Optimizer::PassToken CreateLoopUnswitchPass();
 
+// Creates an infer-alignment pass.
+// This pass infers better alignment from pointer arithmetic and known
+// alignments from OpVariable declarations.
+Optimizer::PassToken CreateInferAlignmentPass();
+
 // Creates a pass to legalize multidimensional arrays for Vulkan.
 // This pass will replace multidimensional arrays of resources with a single
 // dimensional array. Combine-access-chains should be run before this pass.
@@ -654,6 +659,9 @@ Optimizer::PassToken CreateLegalizeMultidimArrayPass();
 // This pass will look for instructions where the same value is computed on all
 // paths leading to the instruction.  Those instructions are deleted.
 Optimizer::PassToken CreateRedundancyEliminationPass();
+
+// Creates a new GVN pass. Alias for CreateRedundancyEliminationPass().
+Optimizer::PassToken CreateNewGVNPass();
 
 // Create scalar replacement pass.
 // This pass replaces composite function scope variables with variables for each
@@ -834,7 +842,12 @@ Optimizer::PassToken CreateDescriptorCompositeScalarReplacementPass();
 // This variant flattens only arrays.
 Optimizer::PassToken CreateDescriptorArrayScalarReplacementPass();
 
-// Create a pass to replace each OpKill instruction with a function call to a
+// Creates an attributor pass.
+// This pass infers memory access decorations (NonWritable, NonReadable) on
+// variables based on how they are used in the module.
+Optimizer::PassToken CreateAttributorPass();
+
+// Creates a pass to replace each OpKill instruction with a function call to a
 // function that has a single OpKill.  Also replace each OpTerminateInvocation
 // instruction  with a function call to a function that has a single
 // OpTerminateInvocation.  This allows more code to be inlined.
@@ -1037,6 +1050,64 @@ Optimizer::PassToken CreateResolveBindingConflictsPass();
 // --strip-debug because this pass will use OpName to canonicalize IDs. i.e. Run
 // --strip-debug after this pass.
 Optimizer::PassToken CreateCanonicalizeIdsPass();
+
+// Creates a GVN-based hoisting pass.
+// This pass hoists identical instructions from then/else blocks to their
+// common predecessor if they dominate their uses.
+Optimizer::PassToken CreateGVNHoistPass();
+
+// Creates a constraint elimination pass.
+// This pass eliminates redundant comparison instructions based on dominating
+// conditions.
+Optimizer::PassToken CreateConstraintEliminationPass();
+
+// Creates a call site splitting pass.
+// This pass splits call sites based on known constraints from dominating
+// conditions.
+Optimizer::PassToken CreateCanonicalizeIdsPass();
+
+// Creates a load-store-motion pass.
+// This pass hoists loads out of diamonds and sinks stores into merge blocks
+// when they access the same address on both sides of a structured conditional.
+Optimizer::PassToken CreateLoadStoreMotionPass();
+
+// Creates a load-combine pass.
+// This pass combines adjacent loads from the same base pointer into wider
+// loads, reducing the total number of memory accesses.
+Optimizer::PassToken CreateLoadCombinePass();
+
+// Creates a called-value-propagation pass.
+// This pass looks for indirect calls through OpPhi/OpSelect and attempts
+// to fold them to direct calls when all possibilities resolve to the
+// same function.
+Optimizer::PassToken CreateCalledValuePropagationPass();
+
+// Creates a call-site-splitting pass.
+// This pass propagates known-constant argument constraints from dominating
+// branches into call blocks, enabling further optimization.
+Optimizer::PassToken CreateCallSiteSplittingPass();
+
+// Creates a infer-address-spaces pass.
+// This pass attempts to propagate non-Generic storage classes from pointer
+// origins through OpBitcast/OpPtrCastToGeneric to loads, stores, access
+// chains and bitcasts.
+Optimizer::PassToken CreateInferAddressSpacesPass();
+
+// Creates a function-specialization pass.
+// This pass specializes functions for constant arguments by cloning the
+// function with the constant propagated.
+Optimizer::PassToken CreateFunctionSpecializationPass();
+
+// Creates a loop-flatten pass.
+// This pass flattens perfect loop nests (where an outer loop has exactly one
+// inner loop with a simple induction variable) into a single loop.
+Optimizer::PassToken CreateLoopFlattenPass();
+
+// Creates a loop-reroll pass.
+// This pass re-rolls loops that have been unrolled (detects single-block loops
+// with multiple isomorphic instruction DAGs rooted at induction variable
+// increments).
+Optimizer::PassToken CreateLoopRerollPass();
 }  // namespace spvtools
 
 #endif  // INCLUDE_SPIRV_TOOLS_OPTIMIZER_HPP_

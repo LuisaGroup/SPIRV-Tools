@@ -25,7 +25,9 @@
 
 #include "source/opt/build_module.h"
 #include "source/opt/graphics_robust_access_pass.h"
-#include "source/opt/log.h"
+#include "source/opt/fix_storage_class.h"
+#include "source/opt/function_specialization_pass.h"
+#include "source/opt/infer_address_spaces_pass.h"
 #include "source/opt/pass_manager.h"
 #include "source/opt/passes.h"
 #include "source/spirv_optimizer_options.h"
@@ -349,10 +351,16 @@ bool Optimizer::RegisterPassFromFlag(const std::string& flag,
              pass_args.c_str());
       return false;
     }
+  } else if (pass_name == "infer-alignment") {
+    RegisterPass(CreateInferAlignmentPass());
   } else if (pass_name == "if-conversion") {
     RegisterPass(CreateIfConversionPass());
-  } else if (pass_name == "freeze-spec-const") {
+  } else if (pass_name == "infer-address-spaces") {
+    RegisterPass(CreateInferAddressSpacesPass());
+  } else if (pass_name == "infer-alignment") {
     RegisterPass(CreateFreezeSpecConstantValuePass());
+  } else if (pass_name == "function-specialization") {
+    RegisterPass(CreateFunctionSpecializationPass());
   } else if (pass_name == "inline-entry-points-exhaustive") {
     RegisterPass(CreateInlineExhaustivePass());
   } else if (pass_name == "inline-entry-points-opaque") {
@@ -453,6 +461,8 @@ bool Optimizer::RegisterPassFromFlag(const std::string& flag,
         return false;
       }
     }
+  } else if (pass_name == "newgvn") {
+    RegisterPass(CreateNewGVNPass());
   } else if (pass_name == "redundancy-elimination") {
     RegisterPass(CreateRedundancyEliminationPass());
   } else if (pass_name == "private-to-local") {
@@ -539,6 +549,8 @@ bool Optimizer::RegisterPassFromFlag(const std::string& flag,
     RegisterPass(CreateGraphicsRobustAccessPass());
   } else if (pass_name == "wrap-opkill") {
     RegisterPass(CreateWrapOpKillPass());
+  } else if (pass_name == "attributor") {
+    RegisterPass(CreateAttributorPass());
   } else if (pass_name == "amd-ext-to-khr") {
     RegisterPass(CreateAmdExtToKhrPass());
   } else if (pass_name == "interpolate-fixup") {
@@ -647,6 +659,22 @@ bool Optimizer::RegisterPassFromFlag(const std::string& flag,
     RegisterPass(CreateResolveBindingConflictsPass());
   } else if (pass_name == "canonicalize-ids") {
     RegisterPass(CreateCanonicalizeIdsPass());
+  } else if (pass_name == "called-value-propagation") {
+    RegisterPass(CreateCalledValuePropagationPass());
+  } else if (pass_name == "gvn-hoist") {
+    RegisterPass(CreateGVNHoistPass());
+  } else if (pass_name == "constraint-elimination") {
+    RegisterPass(CreateConstraintEliminationPass());
+  } else if (pass_name == "call-site-splitting") {
+    RegisterPass(CreateCallSiteSplittingPass());
+  } else if (pass_name == "load-store-motion") {
+    RegisterPass(CreateLoadStoreMotionPass());
+  } else if (pass_name == "load-combine") {
+    RegisterPass(CreateLoadCombinePass());
+  } else if (pass_name == "loop-flatten") {
+    RegisterPass(CreateLoopFlattenPass());
+  } else if (pass_name == "loop-reroll") {
+    RegisterPass(CreateLoopRerollPass());
   } else {
     Errorf(consumer(), nullptr, {},
            "Unknown flag '--%s'. Use --help for a list of valid flags",
@@ -965,6 +993,11 @@ Optimizer::PassToken CreateLoopUnswitchPass() {
       MakeUnique<opt::LoopUnswitchPass>());
 }
 
+Optimizer::PassToken CreateInferAlignmentPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::InferAlignmentPass>());
+}
+
 Optimizer::PassToken CreateLegalizeMultidimArrayPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::LegalizeMultidimArrayPass>());
@@ -973,6 +1006,10 @@ Optimizer::PassToken CreateLegalizeMultidimArrayPass() {
 Optimizer::PassToken CreateRedundancyEliminationPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::RedundancyEliminationPass>());
+}
+
+Optimizer::PassToken CreateNewGVNPass() {
+  return CreateRedundancyEliminationPass();
 }
 
 Optimizer::PassToken CreateRemoveDuplicatesPass() {
@@ -1106,6 +1143,11 @@ Optimizer::PassToken CreateWrapOpKillPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(MakeUnique<opt::WrapOpKill>());
 }
 
+Optimizer::PassToken CreateAttributorPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::AttributorPass>());
+}
+
 Optimizer::PassToken CreateAmdExtToKhrPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::AmdExtensionToKhrPass>());
@@ -1212,10 +1254,59 @@ Optimizer::PassToken CreateResolveBindingConflictsPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::ResolveBindingConflictsPass>());
 }
-
 Optimizer::PassToken CreateCanonicalizeIdsPass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::CanonicalizeIdsPass>());
+}
+
+Optimizer::PassToken CreateCalledValuePropagationPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::CalledValuePropagationPass>());
+}
+
+Optimizer::PassToken CreateLoadStoreMotionPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::LoadStoreMotionPass>());
+}
+
+Optimizer::PassToken CreateLoadCombinePass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::LoadCombinePass>());
+}
+
+Optimizer::PassToken CreateGVNHoistPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::GVNHoistPass>());
+}
+
+Optimizer::PassToken CreateConstraintEliminationPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::ConstraintEliminationPass>());
+}
+
+Optimizer::PassToken CreateCallSiteSplittingPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::CallSiteSplittingPass>());
+}
+
+Optimizer::PassToken CreateInferAddressSpacesPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::InferAddressSpacesPass>());
+}
+
+Optimizer::PassToken CreateFunctionSpecializationPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::FunctionSpecializationPass>());
+}
+
+Optimizer::PassToken CreateLoopFlattenPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::LoopFlattenPass>());
+}
+
+Optimizer::PassToken CreateLoopRerollPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::LoopRerollPass>());
 }
 
 }  // namespace spvtools

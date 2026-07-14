@@ -164,26 +164,8 @@ bool ConstraintEliminationPass::EliminateCmp(Instruction* cmpInst,
 void ConstraintEliminationPass::ProcessBlock(BasicBlock* bb,
                                               FactMapWithHash& facts,
                                               DominatorAnalysis* dom) {
-  // Gather facts from the terminator.
-  Instruction* terminator = bb->terminator();
-  if (terminator->opcode() == spv::Op::OpBranchConditional) {
-    // The condition is operand 0.
-    uint32_t condId = terminator->GetSingleWordInOperand(0);
-    Instruction* condInst = get_def_use_mgr()->GetDef(condId);
-    if (condInst) {
-      if (condInst->opcode() == spv::Op::OpIEqual ||
-          condInst->opcode() == spv::Op::OpLogicalEqual) {
-        AddFact(facts, condInst->GetSingleWordInOperand(0),
-                condInst->GetSingleWordInOperand(1), true);
-      } else if (condInst->opcode() == spv::Op::OpINotEqual ||
-                 condInst->opcode() == spv::Op::OpLogicalNotEqual) {
-        AddFact(facts, condInst->GetSingleWordInOperand(0),
-                condInst->GetSingleWordInOperand(1), false);
-      }
-    }
-  }
-
-  // Eliminate comparisons in this block.
+  // Eliminate comparisons in this block using only the facts inherited from
+  // dominating blocks.
   for (auto it = bb->begin(); it != bb->end(); ) {
     Instruction& inst = *it;
     ++it;  // Advance before potential kill.
@@ -208,12 +190,63 @@ void ConstraintEliminationPass::ProcessBlock(BasicBlock* bb,
     }
   }
 
-  // Recurse into dominator tree children with a copy of the facts.
+  // Gather edge facts from the terminator. A branch condition only holds on
+  // the corresponding outgoing edge: it is true on the true edge and false on
+  // the false edge. It must never be applied to this block itself.
+  FactMapWithHash true_facts = facts;
+  FactMapWithHash false_facts = facts;
+  bool has_edge_facts = false;
+  BasicBlock* true_succ = nullptr;
+  BasicBlock* false_succ = nullptr;
+  Instruction* terminator = bb->terminator();
+  if (terminator->opcode() == spv::Op::OpBranchConditional) {
+    // The condition is operand 0, the true label operand 1, the false label
+    // operand 2.
+    uint32_t condId = terminator->GetSingleWordInOperand(0);
+    Instruction* condInst = get_def_use_mgr()->GetDef(condId);
+    if (condInst) {
+      bool is_equal = false;
+      bool is_not_equal = false;
+      if (condInst->opcode() == spv::Op::OpIEqual ||
+          condInst->opcode() == spv::Op::OpLogicalEqual) {
+        is_equal = true;
+      } else if (condInst->opcode() == spv::Op::OpINotEqual ||
+                 condInst->opcode() == spv::Op::OpLogicalNotEqual) {
+        is_not_equal = true;
+      }
+      if (is_equal || is_not_equal) {
+        uint32_t aId = condInst->GetSingleWordInOperand(0);
+        uint32_t bId = condInst->GetSingleWordInOperand(1);
+        // On the true edge the condition holds; on the false edge its
+        // negation holds.
+        AddFact(true_facts, aId, bId, is_equal);
+        AddFact(false_facts, aId, bId, is_not_equal);
+        true_succ = context()->get_instr_block(
+            get_def_use_mgr()->GetDef(terminator->GetSingleWordInOperand(1)));
+        false_succ = context()->get_instr_block(
+            get_def_use_mgr()->GetDef(terminator->GetSingleWordInOperand(2)));
+        // If both edges lead to the same block the facts contradict; drop
+        // them.
+        has_edge_facts = true_succ != nullptr && false_succ != nullptr &&
+                         true_succ != false_succ;
+      }
+    }
+  }
+
+  // Recurse into dominator tree children, giving each child the facts of the
+  // edge through which it is reached.
   DominatorTreeNode* node = dom->GetDomTree().GetTreeNode(bb);
   if (!node) return;
 
   for (DominatorTreeNode* child : node->children_) {
     FactMapWithHash childFacts = facts;
+    if (has_edge_facts) {
+      if (dom->Dominates(true_succ, child->bb_)) {
+        childFacts = true_facts;
+      } else if (dom->Dominates(false_succ, child->bb_)) {
+        childFacts = false_facts;
+      }
+    }
     ProcessBlock(child->bb_, childFacts, dom);
   }
 }

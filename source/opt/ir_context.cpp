@@ -226,7 +226,8 @@ Instruction* IRContext::KillInst(Instruction* inst) {
   if (inst->opcode() == spv::Op::OpCapability ||
       inst->opcode() == spv::Op::OpConditionalCapabilityINTEL ||
       inst->opcode() == spv::Op::OpExtension ||
-      inst->opcode() == spv::Op::OpConditionalExtensionINTEL) {
+      inst->opcode() == spv::Op::OpConditionalExtensionINTEL ||
+      inst->opcode() == spv::Op::OpExtInstImport) {
     // We reset the feature manager, instead of updating it, because it is just
     // as much work.  We would have to remove all capabilities implied by this
     // capability that are not also implied by the remaining OpCapability
@@ -286,7 +287,8 @@ void IRContext::CollectNonSemanticTree(
     work_list.pop_back();
     get_def_use_mgr()->ForEachUser(
         i, [&work_list, to_kill, &seen](Instruction* user) {
-          if (user->IsNonSemanticInstruction() && seen.insert(user).second) {
+          if (user->IsNonSemanticInstruction() && !user->IsDebugLineInst() &&
+              seen.insert(user).second) {
             work_list.push_back(user);
             to_kill->insert(user);
           }

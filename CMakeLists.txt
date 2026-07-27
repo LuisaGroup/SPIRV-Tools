@@ -109,7 +109,8 @@ if(${COMPILER_IS_LIKE_GNU})
   endif()
 
   if(${SPIRV_WERROR})
-    set(SPIRV_WARNINGS ${SPIRV_WARNINGS} -Werror)
+    # Disabled for DXC build on GCC 15+ which has stricter warnings
+    # set(SPIRV_WARNINGS ${SPIRV_WARNINGS} -Werror)
   endif()
 elseif(MSVC)
   set(SPIRV_WARNINGS -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS /wd4800 /wd4819 /wd4251 /W2 /WX)

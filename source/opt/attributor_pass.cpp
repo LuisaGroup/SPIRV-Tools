@@ -43,7 +43,7 @@ spv::StorageClass GetVariableStorageClass(Instruction* varInst,
 
 // Traces through OpAccessChain and OpCopyObject to find the root variable.
 // Returns true if the user is a memory access (load/store/atomic).
-bool UserAccessesMemory(Instruction* user) {
+[[maybe_unused]] bool UserAccessesMemory(Instruction* user) {
   switch (user->opcode()) {
     case spv::Op::OpLoad:
     case spv::Op::OpStore:

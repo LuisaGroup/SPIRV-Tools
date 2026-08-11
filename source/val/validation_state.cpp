@@ -1313,6 +1313,20 @@ bool ValidationState_t::IsIntVectorType(uint32_t id) const {
   return false;
 }
 
+bool ValidationState_t::IsIntVectorType(uint32_t id, uint32_t width,
+                                        uint32_t components) const {
+  if (!IsIntVectorType(id)) {
+    return false;
+  }
+  if (GetBitWidth(id) != width) {
+    return false;
+  }
+  if (GetDimension(id) != components) {
+    return false;
+  }
+  return true;
+}
+
 bool ValidationState_t::IsIntScalarOrVectorType(uint32_t id) const {
   const Instruction* inst = FindDef(id);
   if (!inst) {
@@ -1787,15 +1801,45 @@ spv_result_t ValidationState_t::CooperativeMatrixShapesMatch(
     std::tie(m2_is_int32, m2_is_const_int32, m2_value) =
         EvalInt32IfConst(m2_use_id);
 
-    if (m1_is_const_int32 && m2_is_const_int32 && m1_value != m2_value &&
-        // CooperativeMatrixConversionsNV allows conversions from Acc->A/B
-        !(is_conversion &&
-          HasCapability(spv::Capability::CooperativeMatrixConversionsNV) &&
-          m2_value ==
-              (uint32_t)spv::CooperativeMatrixUse::MatrixAccumulatorKHR)) {
+    const auto is_accumulator = [](uint32_t use) {
+      return use == uint32_t(spv::CooperativeMatrixUse::MatrixAccumulatorKHR);
+    };
+    const auto is_a_or_b = [](uint32_t use) {
+      return use == uint32_t(spv::CooperativeMatrixUse::MatrixAKHR) ||
+             use == uint32_t(spv::CooperativeMatrixUse::MatrixBKHR);
+    };
+
+    if (swap_row_col &&
+        HasCapability(spv::Capability::CooperativeMatrixConversionsEXT) &&
+        (m1_use_id == m2_use_id ||
+         (m1_is_const_int32 && !is_a_or_b(m1_value)) ||
+         (m2_is_const_int32 && !is_accumulator(m2_value)))) {
       return diag(SPV_ERROR_INVALID_DATA, inst)
-             << "Expected Use of Matrix type and Result Type to be "
-             << "identical";
+             << "A conversion decorated with CooperativeMatrixTransposeEXT "
+                "must have a MatrixAccumulatorKHR Matrix and a MatrixAKHR or "
+                "MatrixBKHR Result Type: "
+             << spvOpcodeString(inst->opcode());
+    }
+
+    if (m1_is_const_int32 && m2_is_const_int32 && m1_value != m2_value) {
+      bool allow_conv = false;
+      // Conversion from Acc->A,B allowed for NV or EXT
+      if ((HasCapability(spv::Capability::CooperativeMatrixConversionsNV) ||
+           HasCapability(spv::Capability::CooperativeMatrixConversionsEXT)) &&
+          is_accumulator(m2_value) && is_a_or_b(m1_value)) {
+        allow_conv = true;
+      }
+      // Conversion from A,B->Acc allowed for EXT
+      if (HasCapability(spv::Capability::CooperativeMatrixConversionsEXT) &&
+          is_accumulator(m1_value) && is_a_or_b(m2_value)) {
+        allow_conv = true;
+      }
+
+      if (!(is_conversion && allow_conv)) {
+        return diag(SPV_ERROR_INVALID_DATA, inst)
+               << "Expected Use of Matrix type and Result Type to be "
+               << "identical";
+      }
     }
   }
 
@@ -1849,16 +1893,39 @@ bool ValidationState_t::EvalConstantValUint64(uint32_t id,
 
   if (inst->opcode() == spv::Op::OpConstantNull) {
     *val = 0;
+  } else if (inst->opcode() == spv::Op::OpConstantSizeOfEXT) {
+    auto type_op = GetIdOpcode(inst->GetOperandAs<uint32_t>(2u));
+    *val = 0;
+    switch (type_op) {
+      case spv::Op::OpTypeBufferEXT:
+      case spv::Op::OpTypeAccelerationStructureKHR:
+        *val = options()->buffer_descriptor_layout.size;
+        break;
+      case spv::Op::OpTypeSampler:
+        *val = options()->sampler_descriptor_layout.size;
+        break;
+      case spv::Op::OpTypeImage:
+        *val = options()->image_descriptor_layout.size;
+        break;
+      case spv::Op::OpTypeTensorARM:
+        *val = options()->tensor_descriptor_layout.size;
+        break;
+      default:
+        break;
+    }
+    return *val > 0;
   } else if (inst->opcode() != spv::Op::OpConstant) {
     // Spec constant values cannot be evaluated so don't consider constant for
     // static validation
     return false;
   } else if (inst->words().size() == 4) {
     *val = inst->word(3);
-  } else {
-    assert(inst->words().size() == 5);
+  } else if (inst->words().size() == 5) {
     *val = inst->word(3);
     *val |= uint64_t(inst->word(4)) << 32;
+  } else {
+    // Literal value wider than 64 bits does not fit in a uint64_t.
+    return false;
   }
   return true;
 }
@@ -1874,17 +1941,40 @@ bool ValidationState_t::EvalConstantValInt64(uint32_t id, int64_t* val) const {
 
   if (inst->opcode() == spv::Op::OpConstantNull) {
     *val = 0;
+  } else if (inst->opcode() == spv::Op::OpConstantSizeOfEXT) {
+    auto type_op = GetIdOpcode(inst->GetOperandAs<uint32_t>(2u));
+    *val = 0;
+    switch (type_op) {
+      case spv::Op::OpTypeBufferEXT:
+      case spv::Op::OpTypeAccelerationStructureKHR:
+        *val = static_cast<int64_t>(options()->buffer_descriptor_layout.size);
+        break;
+      case spv::Op::OpTypeSampler:
+        *val = static_cast<int64_t>(options()->sampler_descriptor_layout.size);
+        break;
+      case spv::Op::OpTypeImage:
+        *val = static_cast<int64_t>(options()->image_descriptor_layout.size);
+        break;
+      case spv::Op::OpTypeTensorARM:
+        *val = static_cast<int64_t>(options()->tensor_descriptor_layout.size);
+        break;
+      default:
+        break;
+    }
+    return *val > 0;
   } else if (inst->opcode() != spv::Op::OpConstant) {
     // Spec constant values cannot be evaluated so don't consider constant for
     // static validation
     return false;
   } else if (inst->words().size() == 4) {
     *val = int32_t(inst->word(3));
-  } else {
-    assert(inst->words().size() == 5);
+  } else if (inst->words().size() == 5) {
     const uint32_t lo_word = inst->word(3);
     const uint32_t hi_word = inst->word(4);
     *val = static_cast<int64_t>(uint64_t(lo_word) | uint64_t(hi_word) << 32);
+  } else {
+    // Literal value wider than 64 bits does not fit in an int64_t.
+    return false;
   }
   return true;
 }

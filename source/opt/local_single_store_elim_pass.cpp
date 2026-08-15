@@ -128,6 +128,7 @@ void LocalSingleStoreElimPass::InitExtensionAllowList() {
       "SPV_NV_compute_shader_derivatives",
       "SPV_NV_shader_image_footprint",
       "SPV_NV_shading_rate",
+      "SPV_NV_cooperative_vector",
       "SPV_NV_mesh_shader",
       "SPV_EXT_mesh_shader",
       "SPV_NV_ray_tracing",

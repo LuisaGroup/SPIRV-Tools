@@ -299,7 +299,10 @@ inline bool MakeSetClosedSSA(IRContext* context, Function* function,
           &inst, [&blocks, &rewriter, &exit_bb, context](
                      Instruction* use, uint32_t operand_index) {
             BasicBlock* use_parent = context->get_instr_block(use);
-            assert(use_parent);
+            // Module-scope annotations and debug instructions are def-use
+            // users, but are not executable uses and therefore require no
+            // LCSSA rewrite.
+            if (use_parent == nullptr) return true;
             if (blocks.count(use_parent->id())) return true;
 
             if (use->opcode() == spv::Op::OpPhi) {

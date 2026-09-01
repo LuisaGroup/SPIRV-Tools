@@ -89,6 +89,7 @@ TEST_F(LCSSATest, SimpleLCSSA) {
                OpName %2 "main"
                OpName %3 "c"
                OpDecorate %3 Location 0
+               OpDecorate %25 RelaxedPrecision
           %5 = OpTypeVoid
           %6 = OpTypeFunction %5
           %7 = OpTypeInt 32 1

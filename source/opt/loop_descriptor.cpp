@@ -443,7 +443,11 @@ bool Loop::IsLCSSA() const {
               &insn,
               [&exit_blocks, ir_context, this](Instruction* use) -> bool {
                 BasicBlock* parent = ir_context->get_instr_block(use);
-                assert(parent && "Invalid analysis");
+                // LCSSA is a property of executable uses in the control-flow
+                // graph. Module-scope annotations and debug instructions are
+                // tracked by def-use, but have no basic block and do not make
+                // a value escape its loop.
+                if (parent == nullptr) return true;
                 if (IsInsideLoop(parent)) return true;
                 if (use->opcode() != spv::Op::OpPhi) return false;
                 return exit_blocks.count(parent->id());

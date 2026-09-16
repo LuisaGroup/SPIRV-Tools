@@ -76,6 +76,7 @@ struct Impl {
     // The descriptor array type id (if there is one).
     uint32_t descriptor_array_id = 0;
     // The storage class for the memory instruction.
+    // Only used for error messages
     spv::StorageClass storage_class;
     // The layout mode (only relevant if a layout is required).
     LayoutMode layout;
@@ -344,6 +345,15 @@ struct Impl {
       reference->layout = GetStorageClassLayout(sc, buffer_block);
 
       return true;
+    } else if (inst->opcode() == spv::Op::OpAbortKHR) {
+      reference->type_id = inst->GetOperandAs<uint32_t>(0u);
+      // Abort messages doesn't have a storage class
+      reference->storage_class = spv::StorageClass::Max;
+      // The abort message is always packed with scalar rules
+      // See https://gitlab.khronos.org/vulkan/vulkan/-/work_items/4954
+      reference->layout = LayoutMode::kScalar;
+      reference->requirement = LayoutRequirement::kRequired;
+      return true;
     }
 
     // Not a memory reference.
@@ -515,6 +525,23 @@ struct Impl {
       if (F % 16 != 0) return true;
     }
     return false;
+  }
+
+  // Used to map the option alignment to the Vulkan VUID
+  uint32_t GetAlignVkErrorId(spv::Op opcode) {
+    if (opcode == spv::Op::OpTypeSampler) {
+      return 11476;
+    } else if (opcode == spv::Op::OpTypeSampledImage ||
+               opcode == spv::Op::OpTypeImage) {
+      return 11477;
+    } else if (opcode == spv::Op::OpTypeBufferEXT) {
+      return 11478;
+    } else if (opcode == spv::Op::OpTypeAccelerationStructureKHR) {
+      return 11479;
+    } else if (opcode == spv::Op::OpTypeTensorARM) {
+      return 11480;
+    }
+    return 0;
   }
 
   // Returns the alignment for type_id for the given layout rules.
@@ -760,9 +787,13 @@ struct Impl {
                           spv::StorageClass storage_class, LayoutMode mode) {
     std::string s;
     std::ostringstream str(s);
-    str << " Instantiated via " << vstate.getIdName(inst->id()) << " in the "
-        << spvtools::StorageClassToString(storage_class)
-        << " storage class using " << mode << " layout rules.";
+    str << " Instantiated via " << vstate.getIdName(inst->id());
+    // OpAbortKHR is an example where there is not storage class
+    if (storage_class != spv::StorageClass::Max) {
+      str << " in the " << spvtools::StorageClassToString(storage_class)
+          << " storage class";
+    }
+    str << " using " << mode << " layout rules.";
     if (mode != LayoutMode::kScalar) {
       if (storage_class == spv::StorageClass::Workgroup) {
         str << vstate.MissingFeature(
@@ -855,12 +886,14 @@ struct Impl {
       uint32_t align = GetAlign(member_id, mode, mat_constraints);
       if (!IsAlignedTo(offset, align)) {
         return vstate.diag(SPV_ERROR_INVALID_ID, type_inst)
+               << vstate.VkErrorID(GetAlignVkErrorId(member_inst->opcode()))
                << "Structure member " << member_idx << " at offset " << offset
                << " is not aligned to " << align << "."
                << CommonError(inst, storage_class, mode);
       }
       if (!IsAlignedTo(offset + incoming_offset, align)) {
         return vstate.diag(SPV_ERROR_INVALID_ID, type_inst)
+               << vstate.VkErrorID(GetAlignVkErrorId(member_inst->opcode()))
                << "Structure member " << member_idx << " at offset " << offset
                << " plus incoming offset " << incoming_offset
                << " is not aligned to " << align << "."

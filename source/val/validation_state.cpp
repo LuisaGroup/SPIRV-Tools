@@ -3254,6 +3254,10 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-FPRoundingMode-04675);
     case 4677:
       return VUID_WRAP(VUID-StandaloneSpirv-Invariant-04677);
+    case 4678:
+      return VUID_WRAP(VUID-StandaloneSpirv-VulkanMemoryModel-04678);
+    case 4679:
+      return VUID_WRAP(VUID-StandaloneSpirv-VulkanMemoryModel-04679);
     case 4680:
       return VUID_WRAP(VUID-StandaloneSpirv-OpTypeRuntimeArray-04680);
     case 4682:
@@ -3288,6 +3292,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-PhysicalStorageBuffer64-04710);
     case 4711:
       return VUID_WRAP(VUID-StandaloneSpirv-OpTypeForwardPointer-04711);
+    case 4716:
+      return VUID_WRAP(VUID-StandaloneSpirv-Offset-04716);
     case 4734:
       return VUID_WRAP(VUID-StandaloneSpirv-OpVariable-04734);
     case 4744:
@@ -3430,6 +3436,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-OpEntryPoint-08722);
     case 8723:
       return VUID_WRAP(VUID-StandaloneSpirv-TileImageEXT-08723);
+    case 8724:
+      return VUID_WRAP(VUID-StandaloneSpirv-None-08724);
     case 8747:
       return VUID_WRAP(VUID-HitTriangleVertexPositionsKHR-HitTriangleVertexPositionsKHR-08747);
     case 8748:
@@ -3440,6 +3448,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-Pointer-08973);
     case 9557:
       return VUID_WRAP(VUID-StandaloneSpirv-Input-09557);
+    case 9565:
+      return VUID_WRAP(VUID-StandaloneSpirv-MaximallyReconvergesKHR-09565);
     case 9638:
       return VUID_WRAP(VUID-StandaloneSpirv-OpTypeImage-09638);
     case 9658:
@@ -3589,6 +3599,18 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
         return VUID_WRAP(VUID-StandaloneSpirv-OpUntypedImageTexelPointerEXT-11416);
     case 11417:
         return VUID_WRAP(VUID-StandaloneSpirv-OpTypeUntypedPointerKHR-11417);
+    // These RuntimeSpirv are here because now we can pass in the size/alignment
+    // which in turns mean we can validate things based on runtime properties
+    case 11476:
+      return VUID_WRAP(VUID-RuntimeSpirv-samplerDescriptorAlignment-11476);
+    case 11477:
+      return VUID_WRAP(VUID-RuntimeSpirv-imageDescriptorAlignment-11477);
+    case 11478:
+      return VUID_WRAP(VUID-RuntimeSpirv-bufferDescriptorAlignment-11478);
+    case 11479:
+      return VUID_WRAP(VUID-RuntimeSpirv-bufferDescriptorAlignment-11479);
+    case 11480:
+      return VUID_WRAP(VUID-RuntimeSpirv-tensorDescriptorAlignment-11480);
     case 11482:
       return VUID_WRAP(VUID-StandaloneSpirv-DescriptorHeapEXT-11482);
     case 11805:
@@ -3621,6 +3643,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-Result-12468);
     case 12469:
       return VUID_WRAP(VUID-StandaloneSpirv-Base-12469);
+    case 12509:
+      return VUID_WRAP(VUID-StandaloneSpirv-Offset-12509);
     default:
       return "";  // unknown id
   }

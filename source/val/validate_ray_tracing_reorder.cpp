@@ -244,6 +244,9 @@ spv_result_t ValidateHitObjectInstructionCommonParameters(
       return _.diag(SPV_ERROR_INVALID_DATA, inst)
              << "Ray Flags must be a 32-bit int scalar";
     }
+    if (auto error = ValidateRayFlagsValue(_, inst, ray_flags_index)) {
+      return error;
+    }
   }
 
   if (isValidId(payload_index)) {
@@ -313,6 +316,23 @@ spv_result_t RayReorderNVPass(ValidationState_t& _, const Instruction* inst) {
             });
     return;
   };
+
+  // Instructions that also require a capability other than the one that
+  // enables them.
+  switch (opcode) {
+    case spv::Op::OpHitObjectTraceRayMotionNV:
+    case spv::Op::OpHitObjectRecordHitMotionNV:
+    case spv::Op::OpHitObjectRecordHitWithIndexMotionNV:
+    case spv::Op::OpHitObjectRecordMissMotionNV:
+    case spv::Op::OpHitObjectGetCurrentTimeNV:
+      if (!_.HasCapability(spv::Capability::RayTracingMotionBlurNV))
+        return _.diag(SPV_ERROR_INVALID_CAPABILITY, inst)
+               << spvOpcodeString(opcode)
+               << ": requires RayTracingMotionBlurNV capability";
+      break;
+    default:
+      break;
+  }
 
   switch (opcode) {
     case spv::Op::OpHitObjectIsMissNV:
@@ -560,6 +580,9 @@ spv_result_t RayReorderNVPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 12 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 7706, 7707)) {
+        return error;
+      }
       // Current Time
       const uint32_t current_time_id = _.GetOperandTypeId(inst, 11);
       if (!_.IsFloatScalarType(current_time_id, 32)) {
@@ -587,6 +610,9 @@ spv_result_t RayReorderNVPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 11 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 7706, 7707)) {
+        return error;
+      }
       break;
     }
 
@@ -782,6 +808,28 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
             });
     return;
   };
+
+  // Instructions that also require a capability other than the one that
+  // enables them.
+  switch (opcode) {
+    case spv::Op::OpHitObjectTraceRayMotionEXT:
+    case spv::Op::OpHitObjectRecordMissMotionEXT:
+    case spv::Op::OpHitObjectTraceMotionReorderExecuteEXT:
+    case spv::Op::OpHitObjectGetCurrentTimeEXT:
+      if (!_.HasCapability(spv::Capability::RayTracingMotionBlurNV))
+        return _.diag(SPV_ERROR_INVALID_CAPABILITY, inst)
+               << spvOpcodeString(opcode)
+               << ": requires RayTracingMotionBlurNV capability";
+      break;
+    case spv::Op::OpHitObjectGetIntersectionTriangleVertexPositionsEXT:
+      if (!_.HasCapability(spv::Capability::RayTracingPositionFetchKHR))
+        return _.diag(SPV_ERROR_INVALID_CAPABILITY, inst)
+               << spvOpcodeString(opcode)
+               << ": requires RayTracingPositionFetchKHR capability";
+      break;
+    default:
+      break;
+  }
 
   switch (opcode) {
     case spv::Op::OpHitObjectIsMissEXT:
@@ -1014,6 +1062,7 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
         return _.diag(SPV_ERROR_INVALID_DATA, inst)
                << "Ray Flags must be a 32-bit int scalar";
       }
+      if (auto error = ValidateRayFlagsValue(_, inst, 1)) return error;
 
       // Miss Index (operand 2)
       const uint32_t miss_index = _.GetOperandTypeId(inst, 2);
@@ -1066,6 +1115,7 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
         return _.diag(SPV_ERROR_INVALID_DATA, inst)
                << "Ray Flags must be a 32-bit int scalar";
       }
+      if (auto error = ValidateRayFlagsValue(_, inst, 1)) return error;
 
       // Miss Index (operand 2)
       const uint32_t miss_index = _.GetOperandTypeId(inst, 2);
@@ -1200,6 +1250,9 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 11 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 11879, 11880)) {
+        return error;
+      }
       break;
     }
 
@@ -1220,6 +1273,9 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 12 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 11879, 11880)) {
+        return error;
+      }
 
       // Current Time (operand 11)
       const uint32_t current_time_id = _.GetOperandTypeId(inst, 11);
@@ -1315,6 +1371,9 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 11 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 11879, 11880)) {
+        return error;
+      }
 
       // Check for optional Hint and Bits (operands 12 and 13)
       if (inst->operands().size() > 12) {
@@ -1370,6 +1429,9 @@ spv_result_t RayReorderEXTPass(ValidationState_t& _, const Instruction* inst) {
               10 /* Ray TMax */, 12 /* Payload */,
               KRayParamInvalidId /* Hit Object Attribute */))
         return error;
+      if (auto error = ValidateRayTMinTMaxValue(_, inst, 8, 10, 11879, 11880)) {
+        return error;
+      }
 
       // Current Time (operand 11)
       const uint32_t current_time_id = _.GetOperandTypeId(inst, 11);

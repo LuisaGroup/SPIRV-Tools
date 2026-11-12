@@ -577,8 +577,8 @@ spv_result_t CheckDecorationsOfBuffers(ValidationState_t& vstate) {
           if (!entry_points.empty() &&
               !hasDecoration(var_id, spv::Decoration::Binding, vstate)) {
             return vstate.diag(SPV_ERROR_INVALID_ID, vstate.FindDef(var_id))
-                   << StorageClassToString(storageClass) << " id '" << var_id
-                   << "' is missing Binding decoration.\n"
+                   << spv::StorageClassToString(storageClass) << " id '"
+                   << var_id << "' is missing Binding decoration.\n"
                    << "From ARB_gl_spirv extension:\n"
                    << "Uniform and shader storage block variables must "
                    << "also be decorated with a *Binding*.";
@@ -806,8 +806,8 @@ spv_result_t CheckVulkanMemoryModelDeprecatedDecorations(
 
   std::string msg;
   std::ostringstream str(msg);
-  for (const auto& def : vstate.all_definitions()) {
-    const auto inst = def.second;
+  for (const Instruction* inst : vstate.all_definitions()) {
+    if (!inst) continue;
     const auto id = inst->id();
     for (const auto& dec : vstate.id_decorations(id)) {
       const auto member = dec.struct_member_index();
@@ -874,7 +874,10 @@ spv_result_t CheckFPRoundingModeForShaders(ValidationState_t& vstate,
     const auto ptr_inst = vstate.FindDef(store->GetOperandAs<uint32_t>(0));
     const auto ptr_type = vstate.FindDef(ptr_inst->GetOperandAs<uint32_t>(0));
 
-    const auto half_float_id = ptr_type->GetOperandAs<uint32_t>(2);
+    const auto half_float_id =
+        ptr_type->opcode() == spv::Op::OpTypeUntypedPointerKHR
+            ? inst.type_id()
+            : ptr_type->GetOperandAs<uint32_t>(2);
     if (!vstate.IsFloatScalarOrVectorType(half_float_id) ||
         vstate.GetBitWidth(half_float_id) != 16) {
       return vstate.diag(SPV_ERROR_INVALID_ID, &inst)
@@ -959,10 +962,10 @@ spv_result_t CheckNonReadableWritableDecorations(ValidationState_t& vstate,
                 "memory object "
                 "declaration (a variable or a function parameter)";
     }
-    const auto var_storage_class = opcode == spv::Op::OpVariable
+
+    const auto var_storage_class = (opcode == spv::Op::OpVariable ||
+                                    opcode == spv::Op::OpUntypedVariableKHR)
                                        ? inst.GetOperandAs<spv::StorageClass>(2)
-                                   : opcode == spv::Op::OpUntypedVariableKHR
-                                       ? inst.GetOperandAs<spv::StorageClass>(3)
                                        : spv::StorageClass::Max;
 
     if (opcode == spv::Op::OpBufferPointerEXT) {

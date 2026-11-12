@@ -398,7 +398,7 @@ struct Impl {
                  << vstate.VkErrorID(10684)
                  << "Invalid explicit layout decorations on type "
                  << vstate.getIdName(type_id) << ", the "
-                 << spvtools::StorageClassToString(sc)
+                 << spv::StorageClassToString(sc)
                  << " storage class has an explicit layout from the "
                  << vstate.SpvDecorationString(dec) << " decoration";
         }
@@ -567,6 +567,8 @@ struct Impl {
       case spv::Op::OpTypeBufferEXT:
       case spv::Op::OpTypeAccelerationStructureKHR:
         return vstate.options()->buffer_descriptor_layout.alignment;
+      case spv::Op::OpTypeTensorARM:
+        return vstate.options()->tensor_descriptor_layout.alignment;
       case spv::Op::OpTypeInt:
       case spv::Op::OpTypeFloat:
         return type_inst->GetOperandAs<uint32_t>(1u) / 8;
@@ -662,6 +664,8 @@ struct Impl {
       case spv::Op::OpTypeBufferEXT:
       case spv::Op::OpTypeAccelerationStructureKHR:
         return vstate.options()->buffer_descriptor_layout.size;
+      case spv::Op::OpTypeTensorARM:
+        return vstate.options()->tensor_descriptor_layout.size;
       case spv::Op::OpTypeInt:
       case spv::Op::OpTypeFloat:
         return type_inst->GetOperandAs<uint32_t>(1u) / 8;
@@ -690,16 +694,16 @@ struct Impl {
         return 0;
       case spv::Op::OpTypeMatrix: {
         const auto num_cols = type_inst->GetOperandAs<uint32_t>(2u);
-        if (matrix_constraints.col_major) {
-          return num_cols * matrix_constraints.stride;
-        } else {
-          const auto* col_inst =
-              vstate.FindDef(type_inst->GetOperandAs<uint32_t>(1u));
-          const auto ele_id = col_inst->GetOperandAs<uint32_t>(1u);
-          const auto num_rows = col_inst->GetOperandAs<uint32_t>(2u);
-          return (num_rows - 1) * matrix_constraints.stride +
-                 num_cols * GetSize(ele_id, {});
-        }
+        const auto* col_inst =
+            vstate.FindDef(type_inst->GetOperandAs<uint32_t>(1u));
+        const auto ele_id = col_inst->GetOperandAs<uint32_t>(1u);
+        const auto num_rows = col_inst->GetOperandAs<uint32_t>(2u);
+        const uint32_t major =
+            matrix_constraints.col_major ? num_cols : num_rows;
+        const uint32_t minor =
+            matrix_constraints.col_major ? num_rows : num_cols;
+        return (major - 1) * matrix_constraints.stride +
+               minor * GetSize(ele_id, {});
       }
       case spv::Op::OpTypeStruct: {
         const auto& members = GetStructMembers(type_id);
@@ -790,7 +794,7 @@ struct Impl {
     str << " Instantiated via " << vstate.getIdName(inst->id());
     // OpAbortKHR is an example where there is not storage class
     if (storage_class != spv::StorageClass::Max) {
-      str << " in the " << spvtools::StorageClassToString(storage_class)
+      str << " in the " << spv::StorageClassToString(storage_class)
           << " storage class";
     }
     str << " using " << mode << " layout rules.";
@@ -1119,7 +1123,7 @@ struct Impl {
                  << vstate.VkErrorID(10684)
                  << "Invalid explicit layout decorations on type "
                  << vstate.getIdName(reference.descriptor_array_id) << ", the "
-                 << spvtools::StorageClassToString(reference.storage_class)
+                 << spv::StorageClassToString(reference.storage_class)
                  << " storage class has an explicit layout from the "
                  << vstate.SpvDecorationString(
                         array_stride ? spv::Decoration::ArrayStride
@@ -1142,6 +1146,20 @@ struct Impl {
       }
 
       if (reference.requirement == LayoutRequirement::kRequired) {
+        // OpTypeBool has no physical size or bit pattern, so it cannot be
+        // used with memory that is required to be explicitly laid out.
+        if (vstate.ContainsType(
+                reference.type_id,
+                [](const Instruction* type_inst) {
+                  return type_inst->opcode() == spv::Op::OpTypeBool;
+                },
+                /* traverse_all_types = */ false)) {
+          return vstate.diag(SPV_ERROR_INVALID_ID, &inst)
+                 << "Type " << vstate.getIdName(reference.type_id)
+                 << " contains an OpTypeBool, which must not be used in the "
+                 << StorageClassToString(reference.storage_class)
+                 << " storage class because it requires an explicit layout";
+        }
         if (auto error =
                 CheckLayout(&inst, reference.type_id, reference.storage_class,
                             reference.layout, 0, {})) {

@@ -367,15 +367,6 @@ spv_result_t ValidateDebugInfoOperand(
   } while (0)
 
 // Check that the operand of a debug info instruction |inst| at |word_index|
-// is a result id of an debug info instruction with DebugTypeBasic.
-spv_result_t ValidateOperandBaseType(ValidationState_t& _,
-                                     const Instruction* inst,
-                                     uint32_t word_index) {
-  return ValidateDebugInfoOperand(_, "Base Type", CommonDebugInfoDebugTypeBasic,
-                                  inst, word_index);
-}
-
-// Check that the operand of a debug info instruction |inst| at |word_index|
 // is a result id of a debug lexical scope instruction which is one of
 // DebugCompilationUnit, DebugFunction, DebugLexicalBlock, or
 // DebugTypeComposite.
@@ -1838,8 +1829,7 @@ spv_result_t ValidateExtInstGlslStd450(ValidationState_t& _,
       if (!_.IsIntScalarOrVectorType(exp_type)) {
         return _.diag(SPV_ERROR_INVALID_DATA, inst)
                << GetExtInstName(_, inst) << ": "
-               << "expected operand Exp to be a 32-bit int scalar "
-               << "or vector type";
+               << "expected operand Exp to be an int scalar or vector type";
       }
 
       if (_.GetDimension(result_type) != _.GetDimension(exp_type)) {
@@ -2122,6 +2112,13 @@ spv_result_t ValidateExtInstGlslStd450(ValidationState_t& _,
         return _.diag(SPV_ERROR_INVALID_DATA, inst)
                << GetExtInstName(_, inst) << ": "
                << "expected operand Eta to be a float scalar";
+      }
+
+      if (_.GetComponentType(result_type) != eta_type) {
+        return _.diag(SPV_ERROR_INVALID_DATA, inst)
+               << GetExtInstName(_, inst) << ": "
+               << "expected operand Eta to have the same component type as "
+                  "Result Type";
       }
       break;
     }
@@ -3410,10 +3407,6 @@ spv_result_t ValidateExtInstOpenClStd(ValidationState_t& _,
         }
       }
 
-      // If pointer points to an array, get the type of an element
-      if (_.IsIntArrayType(format_data_type))
-        format_data_type = _.GetComponentType(format_data_type);
-
       if (!_.IsIntScalarType(format_data_type, 8) &&
           !_.ContainsUntypedPointer(format_type)) {
         return _.diag(SPV_ERROR_INVALID_DATA, inst)
@@ -3659,12 +3652,7 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
             _.EvalInt32IfConst(inst->word(8));
         std::tie(is_int32, is_const_int32, column_end) =
             _.EvalInt32IfConst(inst->word(9));
-        if (line_start == 0) {
-          return _.diag(SPV_ERROR_INVALID_DATA, inst)
-                 << GetExtInstName(_, inst)
-                 << ": operand Line Start (0) is not allowed, source lines "
-                    "start at Line 1";
-        } else if (line_end < line_start) {
+        if (line_end < line_start) {
           return _.diag(SPV_ERROR_INVALID_DATA, inst)
                  << GetExtInstName(_, inst) << ": operand Line End ("
                  << line_end << ") is less than Line Start (" << line_start
@@ -3687,24 +3675,28 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
                    << " lines found in the DebugSource text";
           }
           if (line_start == line_end) {
-            const uint32_t line_length = line_lengths[line_end - 1];
-            if (column_end > line_length) {
-              return _.diag(SPV_ERROR_INVALID_DATA, inst)
-                     << GetExtInstName(_, inst) << ": operand Column End ("
-                     << column_end << ") is larger then Line " << line_end
-                     << " column length of " << line_length
-                     << " found in the DebugSource text";
+            if (line_end != 0) {
+              const uint32_t line_length = line_lengths[line_end - 1];
+              if (column_end > line_length) {
+                return _.diag(SPV_ERROR_INVALID_DATA, inst)
+                       << GetExtInstName(_, inst) << ": operand Column End ("
+                       << column_end << ") is larger then Line " << line_end
+                       << " column length of " << line_length
+                       << " found in the DebugSource text";
+              }
             }
           } else {
-            uint32_t line_length = line_lengths[line_start - 1];
-            if (column_start > line_length) {
-              return _.diag(SPV_ERROR_INVALID_DATA, inst)
-                     << GetExtInstName(_, inst) << ": operand Column Start ("
-                     << column_start << ") is larger then Line " << line_start
-                     << " column length of " << line_length
-                     << " found in the DebugSource text";
+            if (line_start != 0) {
+              const uint32_t line_length = line_lengths[line_start - 1];
+              if (column_start > line_length) {
+                return _.diag(SPV_ERROR_INVALID_DATA, inst)
+                       << GetExtInstName(_, inst) << ": operand Column Start ("
+                       << column_start << ") is larger then Line " << line_start
+                       << " column length of " << line_length
+                       << " found in the DebugSource text";
+              }
             }
-            line_length = line_lengths[line_end - 1];
+            const uint32_t line_length = line_lengths[line_end - 1];
             if (column_end > line_length) {
               return _.diag(SPV_ERROR_INVALID_DATA, inst)
                      << GetExtInstName(_, inst) << ": operand Column End ("
@@ -3805,7 +3797,8 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
         break;
       }
       case CommonDebugInfoDebugTypeVector: {
-        auto validate_base_type = ValidateOperandBaseType(_, inst, 5);
+        auto validate_base_type =
+            ValidateOperandDebugType(_, "Base Type", inst, 5, false);
         if (validate_base_type != SPV_SUCCESS) return validate_base_type;
 
         CHECK_CONST_UINT_OPERAND("Component Count", 6);
@@ -3894,7 +3887,8 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
       }
       case CommonDebugInfoDebugTypedef: {
         CHECK_OPERAND("Name", spv::Op::OpString, 5);
-        auto validate_base_type = ValidateOperandBaseType(_, inst, 6);
+        auto validate_base_type =
+            ValidateOperandDebugType(_, "Base Type", inst, 6, false);
         if (validate_base_type != SPV_SUCCESS) return validate_base_type;
         CHECK_DEBUG_OPERAND("Source", CommonDebugInfoDebugSource, 7);
         CHECK_CONST_UINT_OPERAND("Line", 8);
@@ -4249,10 +4243,15 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
         auto validate_scope = ValidateOperandLexicalScope(_, "Scope", inst, 10);
         if (validate_scope != SPV_SUCCESS) return validate_scope;
         CHECK_OPERAND("Linkage Name", spv::Op::OpString, 11);
+        // Only NonSemantic.Shader.DebugInfo allows a DebugExpression here.
+        const bool allow_debug_expression =
+            ext_inst_type == SPV_EXT_INST_TYPE_NONSEMANTIC_SHADER_DEBUGINFO_100;
         if (!DoesDebugInfoOperandMatchExpectation(
                 _,
-                [](CommonDebugInfoInstructions dbg_inst) {
-                  return dbg_inst == CommonDebugInfoDebugInfoNone;
+                [allow_debug_expression](CommonDebugInfoInstructions dbg_inst) {
+                  return dbg_inst == CommonDebugInfoDebugInfoNone ||
+                         (allow_debug_expression &&
+                          dbg_inst == CommonDebugInfoDebugExpression);
                 },
                 inst, 12)) {
           auto* operand = _.FindDef(inst->word(12));
@@ -4274,8 +4273,10 @@ spv_result_t ValidateExtInstDebugInfo(ValidationState_t& _,
             return _.diag(SPV_ERROR_INVALID_DATA, inst)
                    << GetExtInstName(_, inst) << ": "
                    << "expected operand Variable must be a result id of "
-                      "OpVariable, OpConstant variant, OpSpecConstant variant "
-                      "or DebugInfoNone";
+                      "OpVariable, OpConstant variant, OpSpecConstant variant"
+                   << (allow_debug_expression
+                           ? ", DebugInfoNone or DebugExpression"
+                           : " or DebugInfoNone");
           }
         }
         if (has_optional_at(15)) {

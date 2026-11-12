@@ -653,6 +653,8 @@ bool Optimizer::RegisterPassFromFlag(const std::string& flag,
              pass_args.c_str());
       return false;
     }
+  } else if (pass_name == "nonwritable-propagation") {
+    RegisterPass(CreateNonWritablePropagationPass());
   } else if (pass_name == "trim-capabilities") {
     RegisterPass(CreateTrimCapabilitiesPass());
   } else if (pass_name == "split-combined-image-sampler") {
@@ -1246,6 +1248,11 @@ Optimizer::PassToken CreateInvocationInterlockPlacementPass() {
 Optimizer::PassToken CreateModifyMaximalReconvergencePass(bool add) {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::ModifyMaximalReconvergence>(add));
+}
+
+Optimizer::PassToken CreateNonWritablePropagationPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::NonWritablePropagationPass>());
 }
 
 Optimizer::PassToken CreateOpExtInstWithForwardReferenceFixupPass() {

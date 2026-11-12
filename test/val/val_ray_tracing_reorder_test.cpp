@@ -30,6 +30,15 @@ using ::testing::Values;
 
 using ValidateRayTracingReorderNV = spvtest::ValidateBase<bool>;
 
+const std::string kMotionBlurCapability =
+    "OpCapability RayTracingMotionBlurNV\n";
+const std::string kMotionBlurExtension =
+    "OpExtension \"SPV_NV_ray_tracing_motion_blur\"\n";
+const std::string kPositionFetchCapability =
+    "OpCapability RayTracingPositionFetchKHR\n";
+const std::string kPositionFetchExtension =
+    "OpExtension \"SPV_KHR_ray_tracing_position_fetch\"\n";
+
 std::string GenerateReorderThreadCode(const std::string& body = "",
                                       const std::string& declarations = "",
                                       const std::string& extensions = "",
@@ -108,13 +117,19 @@ TEST_F(ValidateRayTracingReorderNV, ReorderThreadWithHitObjectNV) {
 
 std::string GenerateReorderShaderCode(
     const std::string& body = "", const std::string& declarations = "",
-    const std::string execution_model = "RayGenerationKHR") {
+    const std::string execution_model = "RayGenerationKHR",
+    const std::string& extensions = "", const std::string& capabilities = "") {
   std::ostringstream ss;
   ss << R"(
                OpCapability RayTracingKHR
                OpCapability ShaderInvocationReorderNV
-               OpExtension "SPV_KHR_ray_tracing"
+         )";
+  ss << capabilities;
+  ss << R"(    OpExtension "SPV_KHR_ray_tracing"
                OpExtension "SPV_NV_shader_invocation_reorder"
+         )";
+  ss << extensions;
+  ss << R"(
           %1 = OpExtInstImport "GLSL.std.450"
                OpMemoryModel Logical GLSL450
                OpEntryPoint )"
@@ -233,9 +248,47 @@ TEST_F(ValidateRayTracingReorderNV, HitObjectTraceRayMotionNV) {
       OpHitObjectTraceRayMotionNV %hObj %26 %uint_1 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_0_5 %32 %float_1 %float_10 %__0
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCode(body, declarations, "RayGenerationKHR",
+                                kMotionBlurExtension, kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCode(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectTraceRayMotionNV: requires "
+                        "RayTracingMotionBlurNV capability"));
+}
+
+TEST_F(ValidateRayTracingReorderNV, HitObjectGetCurrentTimeNV) {
+  const std::string declarations = R"(
+        %_ptr_Function_float = OpTypePointer Function %float
+  )";
+
+  const std::string body = R"(
+      %time = OpVariable %_ptr_Function_float Function
+      %12 = OpHitObjectGetCurrentTimeNV %float %hObj
+      OpStore %time %12
+  )";
+
+  CompileSuccessfully(
+      GenerateReorderShaderCode(body, declarations, "RayGenerationKHR",
+                                kMotionBlurExtension, kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
   EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
+  CompileSuccessfully(GenerateReorderShaderCode(body, declarations).c_str(),
+                      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectGetCurrentTimeNV: requires "
+                        "RayTracingMotionBlurNV capability"));
 }
 
 TEST_F(ValidateRayTracingReorderNV, HitObjectRecordHitNV) {
@@ -1003,9 +1056,20 @@ TEST_F(ValidateRayTracingReorderEXT, HitObjectTraceRayMotionEXT) {
       OpHitObjectTraceRayMotionEXT %hObj %26 %uint_1 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_0_5 %32 %float_1 %float_10 %__0
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCodeEXT(body, declarations, kMotionBlurExtension,
+                                   kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
-  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectTraceRayMotionEXT: requires "
+                        "RayTracingMotionBlurNV capability"));
 }
 
 TEST_F(ValidateRayTracingReorderEXT, HitObjectRecordEmptyEXT) {
@@ -1197,9 +1261,20 @@ TEST_F(ValidateRayTracingReorderEXT, HitObjectGetCurrentTimeEXT) {
       OpStore %time %12
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCodeEXT(body, declarations, kMotionBlurExtension,
+                                   kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
-  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectGetCurrentTimeEXT: requires "
+                        "RayTracingMotionBlurNV capability"));
 }
 
 TEST_F(ValidateRayTracingReorderEXT, HitObjectGetObjectRayOriginEXT) {
@@ -1442,9 +1517,21 @@ TEST_F(ValidateRayTracingReorderEXT,
       OpStore %vertices %result
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCodeEXT(body, declarations, kPositionFetchExtension,
+                                   kPositionFetchCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
-  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(
+      getDiagnosticString(),
+      HasSubstr("HitObjectGetIntersectionTriangleVertexPositionsEXT: requires "
+                "RayTracingPositionFetchKHR capability"));
 }
 
 TEST_F(ValidateRayTracingReorderEXT,
@@ -1544,9 +1631,20 @@ TEST_F(ValidateRayTracingReorderEXT, HitObjectRecordMissMotionEXT) {
       OpHitObjectRecordMissMotionEXT %hObj %uint_1 %uint_1 %29 %float_2 %31 %float_5 %float_10
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCodeEXT(body, declarations, kMotionBlurExtension,
+                                   kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
-  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectRecordMissMotionEXT: requires "
+                        "RayTracingMotionBlurNV capability"));
 }
 
 // Fused Hit Object Instructions Tests
@@ -1614,9 +1712,131 @@ TEST_F(ValidateRayTracingReorderEXT, HitObjectTraceMotionReorderExecuteEXT) {
       OpHitObjectTraceMotionReorderExecuteEXT %hObj %26 %uint_1 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_0_5 %32 %float_1 %float_10 %__0 %uint_4 %uint_2
   )";
 
+  CompileSuccessfully(
+      GenerateReorderShaderCodeEXT(body, declarations, kMotionBlurExtension,
+                                   kMotionBlurCapability)
+          .c_str(),
+      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+
   CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
                       SPV_ENV_VULKAN_1_2);
-  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_EQ(SPV_ERROR_INVALID_CAPABILITY,
+            ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("HitObjectTraceMotionReorderExecuteEXT: requires "
+                        "RayTracingMotionBlurNV capability"));
+}
+
+TEST_F(ValidateRayTracingReorderNV, HitObjectTraceRayNVMinMoreThanMax) {
+  const std::string declarations = R"(
+       %uint = OpTypeInt 32 0
+     %uint_1 = OpConstant %uint 1
+    %v3float = OpTypeVector %float 3
+  %float_0_5 = OpConstant %float 0.5
+         %31 = OpConstantComposite %v3float %float_0_5 %float_0_5 %float_0_5
+         %32 = OpConstantComposite %v3float %float_1 %float_1 %float_1
+      %int_1 = OpConstant %int 1
+%float_n1 = OpConstant %float -1
+%uint_129 = OpConstant %uint 129
+  )";
+
+  const std::string body = R"(
+  OpStore %attr %11
+  %26 = OpLoad %23 %as
+  OpHitObjectTraceRayNV %hObj %26 %uint_1 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_1 %32 %float_0_5 %payload
+  )";
+
+  CompileSuccessfully(GenerateReorderShaderCode(body, declarations).c_str(),
+                      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              AnyVUID("VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07707"));
+  EXPECT_THAT(
+      getDiagnosticString(),
+      HasSubstr("Ray TMin (1) must be less than or equal to Ray TMax (0.5)"));
+}
+
+TEST_F(ValidateRayTracingReorderEXT, HitObjectTraceRayEXTMinNegative) {
+  const std::string declarations = R"(
+       %uint = OpTypeInt 32 0
+     %uint_1 = OpConstant %uint 1
+    %v3float = OpTypeVector %float 3
+  %float_0_5 = OpConstant %float 0.5
+         %31 = OpConstantComposite %v3float %float_0_5 %float_0_5 %float_0_5
+         %32 = OpConstantComposite %v3float %float_1 %float_1 %float_1
+      %int_1 = OpConstant %int 1
+%float_n1 = OpConstant %float -1
+%uint_129 = OpConstant %uint 129
+  )";
+
+  const std::string body = R"(
+  OpStore %attr %11
+  %26 = OpLoad %23 %as
+  OpHitObjectTraceRayEXT %hObj %26 %uint_1 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_n1 %32 %float_1 %payload
+  )";
+
+  CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
+                      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              AnyVUID("VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11879"));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("Ray TMin (-1) must be non-negative"));
+}
+
+TEST_F(ValidateRayTracingReorderEXT, HitObjectTraceRayEXTRayFlags) {
+  // OpaqueKHR | CullNoOpaqueKHR
+  const std::string declarations = R"(
+       %uint = OpTypeInt 32 0
+     %uint_1 = OpConstant %uint 1
+    %v3float = OpTypeVector %float 3
+  %float_0_5 = OpConstant %float 0.5
+         %31 = OpConstantComposite %v3float %float_0_5 %float_0_5 %float_0_5
+         %32 = OpConstantComposite %v3float %float_1 %float_1 %float_1
+      %int_1 = OpConstant %int 1
+%float_n1 = OpConstant %float -1
+%uint_129 = OpConstant %uint 129
+  )";
+
+  const std::string body = R"(
+  OpStore %attr %11
+  %26 = OpLoad %23 %as
+  OpHitObjectTraceRayEXT %hObj %26 %uint_129 %uint_1 %uint_1 %uint_1 %uint_1 %31 %float_0_5 %32 %float_1 %payload
+  )";
+
+  CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
+                      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("contains more than one of OpaqueKHR, NoOpaqueKHR, "
+                        "CullOpaqueKHR, and CullNoOpaqueKHR"));
+}
+
+TEST_F(ValidateRayTracingReorderEXT, HitObjectRecordMissEXTRayFlags) {
+  // OpaqueKHR | CullNoOpaqueKHR
+  const std::string declarations = R"(
+       %uint = OpTypeInt 32 0
+     %uint_1 = OpConstant %uint 1
+    %v3float = OpTypeVector %float 3
+  %float_0_5 = OpConstant %float 0.5
+         %31 = OpConstantComposite %v3float %float_0_5 %float_0_5 %float_0_5
+         %32 = OpConstantComposite %v3float %float_1 %float_1 %float_1
+      %int_1 = OpConstant %int 1
+%float_n1 = OpConstant %float -1
+%uint_129 = OpConstant %uint 129
+  )";
+
+  const std::string body = R"(
+      OpHitObjectRecordMissEXT %hObj %uint_129 %uint_1 %31 %float_0_5 %32 %float_1
+  )";
+
+  CompileSuccessfully(GenerateReorderShaderCodeEXT(body, declarations).c_str(),
+                      SPV_ENV_VULKAN_1_2);
+  EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions(SPV_ENV_VULKAN_1_2));
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("contains more than one of OpaqueKHR, NoOpaqueKHR, "
+                        "CullOpaqueKHR, and CullNoOpaqueKHR"));
 }
 
 }  // namespace

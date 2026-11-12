@@ -181,17 +181,6 @@ class ValidationState_t {
   /// Returns true if the id has been defined
   bool IsDefinedId(uint32_t id) const;
 
-  /// Increments the total number of instructions in the file.
-  void increment_total_instructions() { total_instructions_++; }
-
-  /// Increments the total number of functions in the file.
-  void increment_total_functions() { total_functions_++; }
-
-  /// Allocates internal storage. Note, calling this will invalidate any
-  /// pointers to |ordered_instructions_| or |module_functions_| and, hence,
-  /// should only be called at the beginning of validation.
-  void preallocateStorage();
-
   /// Returns the current layout section which is being processed
   ModuleLayoutSection current_layout_section() const;
 
@@ -575,8 +564,9 @@ class ValidationState_t {
     return ordered_instructions_;
   }
 
-  /// Returns a map of instructions mapped by their result id
-  const std::unordered_map<uint32_t, Instruction*>& all_definitions() const {
+  /// Returns all instructions with a result id, indexed by that id.
+  // Entries for ids that are not defined are nullptr.
+  const std::vector<Instruction*>& all_definitions() const {
     return all_definitions_;
   }
 
@@ -756,6 +746,7 @@ class ValidationState_t {
   bool IsTensorType(uint32_t id) const;
   bool IsDescriptorType(spv::Op opcode) const;
   bool IsDescriptorType(uint32_t id) const;
+  bool IsConcreteType(uint32_t id) const;
   // When |length| is not 0, return true only if the array length is equal to
   // |length| and the array length is not defined by a specialization constant.
   bool IsArrayType(uint32_t id, uint64_t length = 0) const;
@@ -912,6 +903,8 @@ class ValidationState_t {
   bool EvalConstantValUint64(uint32_t id, uint64_t* val) const;
   // Same as EvalConstantValUint64 but returns a signed int
   bool EvalConstantValInt64(uint32_t id, int64_t* val) const;
+  // Tries to evaluate a 32-bit scalar float OpConstant
+  bool EvalConstantValFloat32(uint32_t id, float* val) const;
 
   // Tries to evaluate a 32-bit signed or unsigned scalar integer constant.
   // Returns tuple <is_int32, is_const_int32, value>.
@@ -1049,11 +1042,6 @@ class ValidationState_t {
   /// The version of the SPIR-V.
   uint32_t version_ = 0;
 
-  /// The total number of instructions in the binary.
-  size_t total_instructions_ = 0;
-  /// The total number of functions in the binary.
-  size_t total_functions_ = 0;
-
   /// IDs which have been forward declared but have not been defined
   std::unordered_set<uint32_t> unresolved_forward_ids_;
 
@@ -1089,8 +1077,8 @@ class ValidationState_t {
   /// List of all instructions in the order they appear in the binary
   std::vector<Instruction> ordered_instructions_;
 
-  /// Instructions that can be referenced by Ids
-  std::unordered_map<uint32_t, Instruction*> all_definitions_;
+  /// Instructions that can be referenced by Ids, indexed by result id
+  std::vector<Instruction*> all_definitions_;
 
   /// IDs that are entry points, ie, arguments to OpEntryPoint.
   std::vector<uint32_t> entry_points_;
@@ -1218,8 +1206,8 @@ class ValidationState_t {
   uint32_t shader_debug_info_set_id = 0;
 
   /// Maps ids to friendly names.
-  std::unique_ptr<spvtools::FriendlyNameMapper> friendly_mapper_;
-  spvtools::NameMapper name_mapper_;
+  mutable std::unique_ptr<spvtools::FriendlyNameMapper> friendly_mapper_;
+  mutable spvtools::NameMapper name_mapper_;
 
   /// Variables used to reduce the number of diagnostic messages.
   uint32_t num_of_warnings_;
@@ -1242,6 +1230,7 @@ class ValidationState_t {
   void InspectLineAndFunctionDefinition(std::ostringstream& ss,
                                         const Function& func,
                                         const Instruction& inst);
+  void InspectLineAndVariable(std::ostringstream& ss, const Instruction& inst);
   void InspectEntryPoint(std::ostringstream& ss, const Instruction& inst);
   void InspectDebugFunctionDefinition(std::ostringstream& ss,
                                       const Instruction& function_inst);

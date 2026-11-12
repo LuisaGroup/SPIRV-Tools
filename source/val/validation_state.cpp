@@ -24,10 +24,13 @@
 #include <string>
 #include <utility>
 
+#include "source/binary.h"
 #include "source/opcode.h"
 #include "source/spirv_constant.h"
+#include "source/spirv_endian.h"
 #include "source/spirv_target_env.h"
 #include "source/table2.h"
+#include "source/util/bitutils.h"
 #include "source/util/make_unique.h"
 #include "source/val/basic_block.h"
 #include "source/val/construct.h"
@@ -140,28 +143,31 @@ bool IsInstructionInLayoutSection(ModuleLayoutSection layout, spv::Op op) {
   return layout == InstructionLayoutSection(layout, op);
 }
 
-// Counts the number of instructions and functions in the file.
-spv_result_t CountInstructions(void* user_data,
-                               const spv_parsed_instruction_t* inst) {
-  ValidationState_t& _ = *(reinterpret_cast<ValidationState_t*>(user_data));
-  if (spv::Op(inst->opcode) == spv::Op::OpFunction) {
-    _.increment_total_functions();
+// Counts the number of instructions and OpFunctions in the binary, without
+// doing a full spvBinaryParse().
+//
+// The whole module can be skip-scanned without any grammar-table
+void CountInstructionsAndFunctions(const uint32_t* words, size_t num_words,
+                                   spv_endianness_t endian,
+                                   size_t* total_instructions,
+                                   size_t* total_functions) {
+  size_t idx = SPV_INDEX_INSTRUCTION;
+  while (idx < num_words) {
+    const uint32_t first_word = spvFixWord(words[idx], endian);
+    uint16_t word_count = 0;
+    uint16_t opcode = 0;
+    spvOpcodeSplit(first_word, &word_count, &opcode);
+    // If we have something malformed, just stop and the real parse will run
+    // next regardless and detect/report it
+    if (word_count == 0 || idx + word_count > num_words) {
+      break;
+    }
+    ++*total_instructions;
+    if (static_cast<spv::Op>(opcode) == spv::Op::OpFunction) {
+      ++*total_functions;
+    }
+    idx += word_count;
   }
-  _.increment_total_instructions();
-
-  return SPV_SUCCESS;
-}
-
-spv_result_t setHeader(void* user_data, spv_endianness_t, uint32_t,
-                       uint32_t version, uint32_t generator, uint32_t id_bound,
-                       uint32_t) {
-  ValidationState_t& vstate =
-      *(reinterpret_cast<ValidationState_t*>(user_data));
-  vstate.setIdBound(id_bound);
-  vstate.setGenerator(generator);
-  vstate.setVersion(version);
-
-  return SPV_SUCCESS;
 }
 
 // Add features based on SPIR-V core version number.
@@ -232,34 +238,31 @@ ValidationState_t::ValidationState_t(const spv_const_context ctx,
       break;
   }
 
-  // Only attempt to count if we have words, otherwise let the other validation
-  // fail and generate an error.
+  // Only attempt to read the header if we have words,
+  // otherwise let the other validation fail and generate an error.
   if (num_words > 0) {
-    // Count the number of instructions in the binary.
-    // This parse should not produce any error messages. Hijack the context and
-    // replace the message consumer so that we do not pollute any state in input
-    // consumer.
-    spv_context_t hijacked_context = *ctx;
-    hijacked_context.consumer = [](spv_message_level_t, const char*,
-                                   const spv_position_t&, const char*) {};
-    spvBinaryParse(&hijacked_context, this, words, num_words, setHeader,
-                   CountInstructions,
-                   /* diagnostic = */ nullptr);
-    preallocateStorage();
+    spv_const_binary_t binary = {words, num_words};
+    spv_endianness_t endian;
+    spv_header_t header;
+    if (SPV_SUCCESS == spvBinaryEndianness(&binary, &endian) &&
+        SPV_SUCCESS == spvBinaryHeaderGet(&binary, endian, &header)) {
+      setIdBound(header.bound);
+      setGenerator(header.generator);
+      setVersion(header.version);
+
+      size_t total_instructions = 0;
+      size_t total_functions = 0;
+      CountInstructionsAndFunctions(words, num_words, endian,
+                                    &total_instructions, &total_functions);
+      ordered_instructions_.reserve(total_instructions);
+      module_functions_.reserve(total_functions);
+    }
+    // If the header couldn't be read, leave everything at its default
+    // the real parse will report the invalid binary
   }
   UpdateFeaturesBasedOnSpirvVersion(&features_, version_);
 
   name_mapper_ = spvtools::GetTrivialNameMapper();
-  if (options_->use_friendly_names) {
-    friendly_mapper_ = spvtools::MakeUnique<spvtools::FriendlyNameMapper>(
-        context_, words_, num_words_);
-    name_mapper_ = friendly_mapper_->GetNameMapper();
-  }
-}
-
-void ValidationState_t::preallocateStorage() {
-  ordered_instructions_.reserve(total_instructions_);
-  module_functions_.reserve(total_functions_);
 }
 
 spv_result_t ValidationState_t::ForwardDeclareId(uint32_t id) {
@@ -286,6 +289,16 @@ void ValidationState_t::AssignNameToId(uint32_t id, std::string name) {
 }
 
 std::string ValidationState_t::getIdName(uint32_t id) const {
+  // Building the FriendlyNameMapper can adds about 20% extra time to run
+  // spirv-val. We lazily allocate it the first time as we assume most things
+  // running spirv-val will be valid SPIR-V and this is not needed for the
+  // average case.
+  if (options_->use_friendly_names && !friendly_mapper_) {
+    friendly_mapper_ = spvtools::MakeUnique<spvtools::FriendlyNameMapper>(
+        context_, words_, num_words_);
+    name_mapper_ = friendly_mapper_->GetNameMapper();
+  }
+
   const std::string id_name = name_mapper_(id);
 
   std::stringstream out;
@@ -304,19 +317,17 @@ std::vector<uint32_t> ValidationState_t::UnresolvedForwardIds() const {
 }
 
 bool ValidationState_t::IsDefinedId(uint32_t id) const {
-  return all_definitions_.find(id) != std::end(all_definitions_);
+  return FindDef(id) != nullptr;
 }
 
 const Instruction* ValidationState_t::FindDef(uint32_t id) const {
-  auto it = all_definitions_.find(id);
-  if (it == all_definitions_.end()) return nullptr;
-  return it->second;
+  if (id >= all_definitions_.size()) return nullptr;
+  return all_definitions_[id];
 }
 
 Instruction* ValidationState_t::FindDef(uint32_t id) {
-  auto it = all_definitions_.find(id);
-  if (it == all_definitions_.end()) return nullptr;
-  return it->second;
+  if (id >= all_definitions_.size()) return nullptr;
+  return all_definitions_[id];
 }
 
 ModuleLayoutSection ValidationState_t::current_layout_section() const {
@@ -616,7 +627,13 @@ void ValidationState_t::RegisterDebugInstruction(const Instruction* inst) {
 }
 
 void ValidationState_t::RegisterInstruction(Instruction* inst) {
-  if (inst->id()) all_definitions_.insert(std::make_pair(inst->id(), inst));
+  if (inst->id()) {
+    // Should be bounded by the module's id bound (see LimitCheckIdBound)
+    if (inst->id() >= all_definitions_.size()) {
+      all_definitions_.resize(inst->id() + 1, nullptr);
+    }
+    all_definitions_[inst->id()] = inst;
+  }
 
   // Some validation checks are easier by getting all the consumers
   for (size_t i = 0; i < inst->operands().size(); ++i) {
@@ -1657,6 +1674,43 @@ bool ValidationState_t::IsDescriptorType(uint32_t id) const {
   return inst && IsDescriptorType(inst->opcode());
 }
 
+bool ValidationState_t::IsConcreteType(uint32_t id) const {
+  const Instruction* type_inst = FindDef(id);
+  if (!type_inst) return false;
+
+  switch (type_inst->opcode()) {
+    // scalars
+    case spv::Op::OpTypeInt:
+    case spv::Op::OpTypeFloat:
+      return true;
+
+    // vectors/matrix/arrays - only if they are made of concrete types
+    // example: vector of boolean is not concrete.
+    case spv::Op::OpTypeVector:
+    case spv::Op::OpTypeVectorIdEXT:
+    case spv::Op::OpTypeMatrix:
+    case spv::Op::OpTypeArray:
+    case spv::Op::OpTypeRuntimeArray:
+      return IsConcreteType(type_inst->GetOperandAs<uint32_t>(1u));
+
+    case spv::Op::OpTypeStruct:
+      for (uint32_t i = 1; i < type_inst->operands().size(); ++i) {
+        if (!IsConcreteType(type_inst->GetOperandAs<uint32_t>(i))) {
+          return false;
+        }
+      }
+      return true;
+
+    case spv::Op::OpTypePointer:
+      return addressing_model() == spv::AddressingModel::Physical32 ||
+             addressing_model() == spv::AddressingModel::Physical64 ||
+             type_inst->GetOperandAs<spv::StorageClass>(1u) ==
+                 spv::StorageClass::PhysicalStorageBuffer;
+    default:
+      return false;
+  }
+}
+
 const Instruction* ValidationState_t::FindUntypedBaseVariable(
     const Instruction* inst) {
   bool found_heap_base = false;
@@ -1669,6 +1723,13 @@ const Instruction* ValidationState_t::FindUntypedBaseVariable(
       case spv::Op::OpUntypedInBoundsPtrAccessChainKHR:
       case spv::Op::OpUntypedArrayLengthKHR:
         base_inst = FindDef(base_inst->GetOperandAs<uint32_t>(3));
+        break;
+      case spv::Op::OpAccessChain:
+      case spv::Op::OpInBoundsAccessChain:
+      case spv::Op::OpPtrAccessChain:
+      case spv::Op::OpInBoundsPtrAccessChain:
+      case spv::Op::OpCopyObject:
+        base_inst = FindDef(base_inst->GetOperandAs<uint32_t>(2));
         break;
       case spv::Op::OpLoad:
       case spv::Op::OpAtomicLoad:
@@ -1729,8 +1790,10 @@ bool ValidationState_t::IsDescriptorHeapBaseVariable(const Instruction* inst) {
       IsBuiltin(base_inst->id(), spv::BuiltIn::SamplerHeapEXT) ||
       IsBuiltin(base_inst->id(), spv::BuiltIn::ResourceHeapEXT);
 
-  return FindDef(base_inst->id())->opcode() == spv::Op::OpBufferPointerEXT ||
-         (FindDef(base_inst->id())->opcode() == spv::Op::OpUntypedVariableKHR &&
+  const spv::Op base_opcode = base_inst->opcode();
+  return base_opcode == spv::Op::OpBufferPointerEXT ||
+         ((base_opcode == spv::Op::OpUntypedVariableKHR ||
+           base_opcode == spv::Op::OpVariable) &&
           is_heap_base);
 }
 
@@ -1979,6 +2042,26 @@ bool ValidationState_t::EvalConstantValInt64(uint32_t id, int64_t* val) const {
   return true;
 }
 
+bool ValidationState_t::EvalConstantValFloat32(uint32_t id, float* val) const {
+  const Instruction* inst = FindDef(id);
+  if (!inst) {
+    assert(0 && "Instruction not found");
+    return false;
+  }
+
+  if (!IsFloatScalarType(inst->type_id(), 32)) return false;
+
+  if (inst->opcode() == spv::Op::OpConstantNull) {
+    *val = 0.0f;
+  } else if (inst->opcode() == spv::Op::OpConstant) {
+    *val = spvtools::utils::BitwiseCast<float>(inst->word(3));
+  } else {
+    // Spec constant values cannot be evaluated
+    return false;
+  }
+  return true;
+}
+
 // <is_int32, is_const_int32, value>
 std::tuple<bool, bool, uint32_t> ValidationState_t::EvalInt32IfConst(
     uint32_t id) const {
@@ -1999,6 +2082,15 @@ std::tuple<bool, bool, uint32_t> ValidationState_t::EvalInt32IfConst(
 
   if (inst->opcode() == spv::Op::OpConstantNull) {
     return std::make_tuple(true, true, 0);
+  }
+
+  if (inst->opcode() == spv::Op::OpConstantSizeOfEXT) {
+    // The value is only known when the descriptor layout was provided.
+    uint64_t value = 0;
+    if (EvalConstantValUint64(id, &value)) {
+      return std::make_tuple(true, true, static_cast<uint32_t>(value));
+    }
+    return std::make_tuple(true, false, 0);
   }
 
   assert(inst->words().size() == 4);
@@ -2188,12 +2280,22 @@ bool ValidationState_t::LogicallyMatch(const Instruction* lhs,
 const Instruction* ValidationState_t::TracePointer(
     const Instruction* inst) const {
   auto base_ptr = inst;
-  while (base_ptr->opcode() == spv::Op::OpAccessChain ||
-         base_ptr->opcode() == spv::Op::OpInBoundsAccessChain ||
-         base_ptr->opcode() == spv::Op::OpPtrAccessChain ||
-         base_ptr->opcode() == spv::Op::OpInBoundsPtrAccessChain ||
-         base_ptr->opcode() == spv::Op::OpCopyObject) {
-    base_ptr = FindDef(base_ptr->GetOperandAs<uint32_t>(2u));
+  while (true) {
+    const spv::Op opcode = base_ptr->opcode();
+    if (opcode == spv::Op::OpAccessChain ||
+        opcode == spv::Op::OpInBoundsAccessChain ||
+        opcode == spv::Op::OpPtrAccessChain ||
+        opcode == spv::Op::OpInBoundsPtrAccessChain ||
+        opcode == spv::Op::OpCopyObject) {
+      base_ptr = FindDef(base_ptr->GetOperandAs<uint32_t>(2u));
+    } else if (opcode == spv::Op::OpUntypedAccessChainKHR ||
+               opcode == spv::Op::OpUntypedInBoundsAccessChainKHR ||
+               opcode == spv::Op::OpUntypedPtrAccessChainKHR ||
+               opcode == spv::Op::OpUntypedInBoundsPtrAccessChainKHR) {
+      base_ptr = FindDef(base_ptr->GetOperandAs<uint32_t>(3u));
+    } else {
+      break;
+    }
   }
   return base_ptr;
 }
@@ -2262,15 +2364,28 @@ bool ValidationState_t::ContainsSizedIntOrFloatType(uint32_t id, spv::Op type,
 }
 
 bool ValidationState_t::ContainsLimitedUseIntOrFloatType(uint32_t id) const {
-  if ((!HasCapability(spv::Capability::Int16) &&
-       ContainsSizedIntOrFloatType(id, spv::Op::OpTypeInt, 16)) ||
-      (!HasCapability(spv::Capability::Int8) &&
-       ContainsSizedIntOrFloatType(id, spv::Op::OpTypeInt, 8)) ||
-      (!HasCapability(spv::Capability::Float16) &&
-       ContainsSizedIntOrFloatType(id, spv::Op::OpTypeFloat, 16))) {
-    return true;
-  }
-  return false;
+  const bool check_int16 = !HasCapability(spv::Capability::Int16);
+  const bool check_int8 = !HasCapability(spv::Capability::Int8);
+  const bool check_float16 = !HasCapability(spv::Capability::Float16);
+  if (!check_int16 && !check_int8 && !check_float16) return false;
+
+  // Used instead of ContainsSizedIntOrFloatType
+  // found it was measurably faster then calling 3 times
+  // (also its not a super complex function)
+  const auto f = [check_int16, check_int8,
+                  check_float16](const Instruction* inst) {
+    if (inst->opcode() == spv::Op::OpTypeInt) {
+      const uint32_t width = inst->GetOperandAs<uint32_t>(1u);
+      return (check_int16 && width == 16) || (check_int8 && width == 8);
+    }
+    if (inst->opcode() == spv::Op::OpTypeFloat) {
+      // Bfloat16 is a special type.
+      if (inst->words().size() > 3) return false;
+      return check_float16 && inst->GetOperandAs<uint32_t>(1u) == 16;
+    }
+    return false;
+  };
+  return ContainsType(id, f);
 }
 
 bool ValidationState_t::ContainsRuntimeArray(uint32_t id) const {
@@ -2340,18 +2455,39 @@ std::string ValidationState_t::InspectShaderDebugInfo(const Instruction& inst) {
     } else if (opcode == spv::Op::OpReturnValue ||
                opcode == spv::Op::OpFunctionParameter) {
       InspectLineAndFunctionDefinition(ss, *func, inst);
+    } else if (opcode == spv::Op::OpLoad || opcode == spv::Op::OpStore ||
+               opcode == spv::Op::OpAccessChain ||
+               opcode == spv::Op::OpInBoundsAccessChain ||
+               opcode == spv::Op::OpPtrAccessChain ||
+               opcode == spv::Op::OpInBoundsPtrAccessChain ||
+               opcode == spv::Op::OpUntypedAccessChainKHR ||
+               opcode == spv::Op::OpUntypedInBoundsAccessChainKHR ||
+               opcode == spv::Op::OpUntypedPtrAccessChainKHR ||
+               opcode == spv::Op::OpUntypedInBoundsPtrAccessChainKHR) {
+      InspectLineAndVariable(ss, inst);
     } else {
       // Currently a fall back for anything in a function
       InspectDebugLine(ss, inst);
     }
-  } else if (opcode == spv::Op::OpVariable) {
+  } else if (opcode == spv::Op::OpVariable ||
+             opcode == spv::Op::OpUntypedVariableKHR) {
     // Know are global because not in any function
-    // TODO - test with OpUntypedVariable as well
     InspectDebugGlobalVariable(ss, inst);
+  } else if (spvOpcodeIsDecoration(opcode)) {
+    // Print the global variable being decorated
+    const Instruction* target = FindDef(inst.GetOperandAs<uint32_t>(0));
+    if (target &&
+        (target->opcode() == spv::Op::OpVariable ||
+         target->opcode() == spv::Op::OpUntypedVariableKHR) &&
+        target->function() == nullptr) {
+      InspectDebugGlobalVariable(ss, *target);
+    }
   } else if (opcode == spv::Op::OpExecutionMode ||
              opcode == spv::Op::OpExecutionModeId ||
              opcode == spv::Op::OpEntryPoint) {
     InspectEntryPoint(ss, inst);
+  } else if (opcode == spv::Op::OpFunction) {
+    InspectDebugFunctionDefinition(ss, inst);
   }
 
   return ss.str();
@@ -2447,7 +2583,10 @@ void ValidationState_t::InspectDebugLine(std::ostringstream& ss,
   size_t idx = &inst - &ordered_instructions()[0];
   while (idx > 0) {
     const Instruction* prev = &ordered_instructions()[--idx];
-    if (prev->opcode() == spv::Op::OpFunction) {
+    // A DebugLine only applies until the end of its block
+    if (prev->opcode() == spv::Op::OpFunction ||
+        prev->opcode() == spv::Op::OpLabel ||
+        spvOpcodeIsBlockTerminator(prev->opcode())) {
       break;
     }
 
@@ -2581,6 +2720,37 @@ void ValidationState_t::InspectLineAndFunctionDefinition(
   }
 }
 
+// For memory accesses, print both the line of the access and where the
+// variable was declared
+void ValidationState_t::InspectLineAndVariable(std::ostringstream& ss,
+                                               const Instruction& inst) {
+  InspectDebugLine(ss, inst);
+
+  // OpStore has no result, so the pointer is the first operand.
+  // UntypedAccessChain have the Base Type operand before the Base.
+  size_t pointer_index = 2;
+  if (inst.opcode() == spv::Op::OpStore) {
+    pointer_index = 0;
+  } else if (spvOpcodeGeneratesUntypedPointer(inst.opcode())) {
+    pointer_index = 3;
+  }
+  const Instruction* pointer =
+      FindDef(inst.GetOperandAs<uint32_t>(pointer_index));
+  if (!pointer) return;
+
+  const Instruction* variable = TracePointer(pointer);
+  if (!variable || (variable->opcode() != spv::Op::OpVariable &&
+                    variable->opcode() != spv::Op::OpUntypedVariableKHR)) {
+    return;
+  }
+
+  if (variable->function()) {
+    InspectDebugLocalVariable(ss, *variable->function(), *variable);
+  } else {
+    InspectDebugGlobalVariable(ss, *variable);
+  }
+}
+
 void ValidationState_t::InspectEntryPoint(std::ostringstream& ss,
                                           const Instruction& inst) {
   const Instruction* function_inst = nullptr;
@@ -2643,6 +2813,9 @@ void ValidationState_t::InspectDebugFunctionDefinition(
 void ValidationState_t::PrintShaderDebugInfoSource(
     std::ostringstream& ss, const Instruction& debug_source,
     const DebugSourceInfo& source_info) {
+  // Line 0 is used when it can't be attributed to any source line
+  if (source_info.line_start == 0) return;
+
   // The left hand side line number, need to make sure if going from line number
   // 99 to 100 that all lines have the same padding
   const size_t vertical_line_padding =
@@ -2687,6 +2860,9 @@ void ValidationState_t::PrintShaderDebugInfoSource(
       FindDef(debug_source.GetOperandAs<uint32_t>(4));
   ss << "\n  --> " << file_string->GetOperandAs<std::string>(1) << ":"
      << source_info.line_start << ":" << source_info.column_start << '\n';
+
+  // The Text operand is optional
+  if (debug_source.operands().size() < 6) return;
 
   add_vertical_line(0);
   ss << '\n';
@@ -3302,6 +3478,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-OpImage-04777);
     case 4780:
       return VUID_WRAP(VUID-StandaloneSpirv-Result-04780);
+    case 4865:
+      return VUID_WRAP(VUID-StandaloneSpirv-Offset-04865);
     case 4915:
       return VUID_WRAP(VUID-StandaloneSpirv-Location-04915);
     case 4916:
@@ -3330,6 +3508,14 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-OpTypeImage-06214);
     case 6314:
       return VUID_WRAP(VUID-StandaloneSpirv-PhysicalStorageBuffer64-06314);
+    case 6349:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpRayQueryInitializeKHR-06349);
+    case 6350:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpRayQueryInitializeKHR-06350);
+    case 6356:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpTraceRayKHR-06356);
+    case 6357:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpTraceRayKHR-06357);
     case 6491:
       return VUID_WRAP(VUID-StandaloneSpirv-DescriptorSet-06491);
     case 6671:
@@ -3426,6 +3612,10 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-Base-07652);
     case 7703:
       return VUID_WRAP(VUID-StandaloneSpirv-Component-07703);
+    case 7706:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07706);
+    case 7707:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpHitObjectTraceRayNV-07707);
     case 7951:
       return VUID_WRAP(VUID-StandaloneSpirv-SubgroupVoteKHR-07951);
     case 8720:
@@ -3471,6 +3661,10 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-OpTypeFloat-10370);
     case 10583:
       return VUID_WRAP(VUID-StandaloneSpirv-Component-10583);
+    case 10584:
+      return VUID_WRAP(VUID-StandaloneSpirv-Execution-10584);
+    case 10585:
+      return VUID_WRAP(VUID-StandaloneSpirv-Execution-10585);
     case 10589:
       return VUID_WRAP(VUID-CullPrimitiveEXT-CullPrimitiveEXT-10589);
     case 10590:
@@ -3615,6 +3809,10 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-DescriptorHeapEXT-11482);
     case 11805:
       return VUID_WRAP(VUID-StandaloneSpirv-OpArrayLength-11805);
+    case 11879:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11879);
+    case 11880:
+      return VUID_WRAP(VUID-RuntimeSpirv-OpHitObjectTraceRayEXT-11880);
     case 12243:
       return VUID_WRAP(VUID-StandaloneSpirv-Scope-12243);
     case 12294:
@@ -3633,6 +3831,8 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-MemorySemantics-13556);
     case 13557:
       return VUID_WRAP(VUID-StandaloneSpirv-MemorySemantics-13557);
+    case 12464:
+      return VUID_WRAP(VUID-StandaloneSpirv-OpUndef-12464);
     case 12465:
       return VUID_WRAP(VUID-StandaloneSpirv-OpConvertFToU-12465);
     case 12466:
@@ -3645,6 +3845,16 @@ std::string ValidationState_t::VkErrorID(uint32_t id,
       return VUID_WRAP(VUID-StandaloneSpirv-Base-12469);
     case 12509:
       return VUID_WRAP(VUID-StandaloneSpirv-Offset-12509);
+    case 13706:
+      return VUID_WRAP(VUID-StandaloneSpirv-UniformConstant-13706);
+    case 13743:
+      return VUID_WRAP(VUID-StandaloneSpirv-OpUntypedImageTexelPointerEXT-13743);
+    case 13744:
+      return VUID_WRAP(VUID-StandaloneSpirv-ResourceHeapEXT-13744);
+    case 13745:
+      return VUID_WRAP(VUID-StandaloneSpirv-UniformConstant-13745);
+    case 13746:
+      return VUID_WRAP(VUID-StandaloneSpirv-UniformConstant-13746);
     default:
       return "";  // unknown id
   }

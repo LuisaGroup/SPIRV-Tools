@@ -4588,6 +4588,87 @@ OpFunctionEnd
               HasSubstr("Default must be an OpLabel instruction"));
 }
 
+TEST_F(ValidateCFG, BranchConditionalWeightsBothZero) {
+  const std::string spirv = R"(
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%bool = OpTypeBool
+%true = OpConstantTrue %bool
+%void_fn = OpTypeFunction %void
+%main = OpFunction %void None %void_fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %a %merge 0 0
+%a = OpLabel
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+)";
+
+  CompileSuccessfully(spirv);
+  EXPECT_EQ(SPV_ERROR_INVALID_ID, ValidateInstructions());
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("At least one Branch Weight of OpBranchConditional "
+                        "must be non-zero"));
+}
+
+TEST_F(ValidateCFG, BranchConditionalWeightsOverflow) {
+  const std::string spirv = R"(
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%bool = OpTypeBool
+%true = OpConstantTrue %bool
+%void_fn = OpTypeFunction %void
+%main = OpFunction %void None %void_fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %a %merge 4294967295 1
+%a = OpLabel
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+)";
+
+  CompileSuccessfully(spirv);
+  EXPECT_EQ(SPV_ERROR_INVALID_ID, ValidateInstructions());
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("The sum of the Branch Weights of OpBranchConditional "
+                        "must not overflow a 32-bit unsigned integer"));
+}
+
+TEST_F(ValidateCFG, BranchConditionalWeightsGood) {
+  const std::string spirv = R"(
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main"
+OpExecutionMode %main LocalSize 1 1 1
+%void = OpTypeVoid
+%bool = OpTypeBool
+%true = OpConstantTrue %bool
+%void_fn = OpTypeFunction %void
+%main = OpFunction %void None %void_fn
+%entry = OpLabel
+OpSelectionMerge %merge None
+OpBranchConditional %true %a %merge 4294967294 1
+%a = OpLabel
+OpBranch %merge
+%merge = OpLabel
+OpReturn
+OpFunctionEnd
+)";
+
+  CompileSuccessfully(spirv);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions());
+}
+
 TEST_F(ValidateCFG, BlockDepthRecursion) {
   const std::string text = R"(
 OpCapability Shader
@@ -5485,8 +5566,62 @@ TEST_F(ValidateCFG, LifetimeNonPointer) {
   EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions());
   EXPECT_THAT(
       getDiagnosticString(),
-      HasSubstr(
-          "OpLifetimeStart pointer operand type must be a OpTypePointer"));
+      HasSubstr("OpLifetimeStart pointer operand type must be a OpTypePointer "
+                "or OpTypeUntypedPointerKHR"));
+}
+
+TEST_F(ValidateCFG, LifetimeUntypedPointerGood) {
+  const std::string text = R"(
+           OpCapability Kernel
+           OpCapability Addresses
+           OpCapability UntypedPointersKHR
+           OpExtension "SPV_KHR_untyped_pointers"
+           OpMemoryModel Physical64 OpenCL
+           OpEntryPoint Kernel %func "main"
+   %uint = OpTypeInt 32 0
+   %void = OpTypeVoid
+      %5 = OpTypeFunction %void
+    %ptr = OpTypeUntypedPointerKHR Function
+  %func = OpFunction %void None %5
+  %entry = OpLabel
+    %var = OpUntypedVariableKHR %ptr Function %uint
+           OpLifetimeStart %var 4
+           OpLifetimeStop %var 4
+           OpReturn
+           OpFunctionEnd
+)";
+
+  CompileSuccessfully(text);
+  EXPECT_EQ(SPV_SUCCESS, ValidateInstructions());
+}
+
+TEST_F(ValidateCFG, LifetimeUntypedPointerStorageClass) {
+  const std::string text = R"(
+           OpCapability Kernel
+           OpCapability Addresses
+           OpCapability UntypedPointersKHR
+           OpExtension "SPV_KHR_untyped_pointers"
+           OpMemoryModel Physical64 OpenCL
+           OpEntryPoint Kernel %func "main"
+   %uint = OpTypeInt 32 0
+   %void = OpTypeVoid
+      %5 = OpTypeFunction %void
+    %ptr = OpTypeUntypedPointerKHR Function
+%ptr_cwg = OpTypeUntypedPointerKHR CrossWorkgroup
+  %func = OpFunction %void None %5
+  %entry = OpLabel
+    %var = OpUntypedVariableKHR %ptr Function %uint
+   %cast = OpBitcast %ptr_cwg %var
+           OpLifetimeStart %cast 4
+           OpReturn
+           OpFunctionEnd
+)";
+
+  CompileSuccessfully(text);
+  EXPECT_EQ(SPV_ERROR_INVALID_DATA, ValidateInstructions());
+  EXPECT_THAT(getDiagnosticString(),
+              HasSubstr("OpLifetimeStart pointer operand must be in the "
+                        "Function storage class"));
 }
 
 }  // namespace

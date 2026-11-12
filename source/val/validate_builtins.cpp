@@ -17,6 +17,7 @@
 
 // Validates correctness of built-in variables.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <functional>
@@ -772,6 +773,10 @@ class BuiltInsValidator {
   bool IsBulitinInEntryPoint(const Instruction& inst, uint32_t entry_point) {
     auto get_underlying_type_id = [&](const Instruction* ifx_var) {
       auto pointer_type_inst = _.FindDef(ifx_var->type_id());
+      // Untyped pointers have no pointee type.
+      if (pointer_type_inst->opcode() != spv::Op::OpTypePointer) {
+        return uint32_t(0);
+      }
       auto type_inst = _.FindDef(pointer_type_inst->GetOperandAs<uint32_t>(2));
       while (type_inst->opcode() == spv::Op::OpTypeArray) {
         type_inst = _.FindDef(type_inst->GetOperandAs<uint32_t>(1));
@@ -802,6 +807,10 @@ class BuiltInsValidator {
       std::map<uint32_t, uint32_t>& entry_point_interface_id) {
     auto get_underlying_type_id = [&](const Instruction* ifx_var) {
       auto pointer_type_inst = _.FindDef(ifx_var->type_id());
+      // Untyped pointers have no pointee type.
+      if (pointer_type_inst->opcode() != spv::Op::OpTypePointer) {
+        return uint32_t(0);
+      }
       auto type_inst = _.FindDef(pointer_type_inst->GetOperandAs<uint32_t>(2));
       while (type_inst->opcode() == spv::Op::OpTypeArray) {
         type_inst = _.FindDef(type_inst->GetOperandAs<uint32_t>(1));
@@ -859,6 +868,13 @@ class BuiltInsValidator {
   // For Builtin that can only be declared once in an entry point, keep track if
   // the entry point has it already
   std::set<uint32_t> cull_primitive_entry_points_;
+
+  // Single spot to dedupe repeated id operands within a single instruction.
+  // We use a vector over a unordered_set because the value here comes from
+  // not having to re-allocate things each time.
+  // The dedupe is within a single instruction so the vector is only slower
+  // if you have a crazy ~4000 operand instruction. (very unlikely)
+  std::vector<uint32_t> already_checked_ids_;
 };
 
 void BuiltInsValidator::Update(const Instruction& inst) {
@@ -1014,12 +1030,20 @@ spv_result_t BuiltInsValidator::ValidateBlockTypeOrArrayedType(
                     " is not a bool scalar.");
       }
       break;
-    case spv::Op::OpTypeInt:
+    case spv::Op::OpTypeInt: {
       if (!_.IsIntScalarType(underlying_type)) {
         return diag(GetDefinitionDesc(decoration, inst) +
                     " is not an integer scalar.");
       }
+      const uint32_t bit_width = _.GetBitWidth(underlying_type);
+      if (bit_width != 32) {
+        std::ostringstream ss;
+        ss << GetDefinitionDesc(decoration, inst) << " has bit width "
+           << bit_width << ".";
+        return diag(ss.str());
+      }
       break;
+    }
     default:
       assert(0 && "Unhandled scalar type");
       return diag(GetDefinitionDesc(decoration, inst) +
@@ -1435,10 +1459,8 @@ spv_result_t BuiltInsValidator::ValidateF32ArrHelper(
 
   if (num_components != 0) {
     uint64_t actual_num_components = 0;
-    if (!_.EvalConstantValUint64(type_inst->word(3), &actual_num_components)) {
-      assert(0 && "Array type definition is corrupt");
-    }
-    if (actual_num_components != num_components) {
+    if (_.EvalConstantValUint64(type_inst->word(3), &actual_num_components) &&
+        actual_num_components != num_components) {
       std::ostringstream ss;
       ss << GetDefinitionDesc(decoration, inst) << " has "
          << actual_num_components << " components.";
@@ -2502,6 +2524,24 @@ spv_result_t BuiltInsValidator::ValidatePrimitiveIdAtReference(
           referenced_from_inst, std::placeholders::_1));
     }
 
+    if (storage_class == spv::StorageClass::Input) {
+      assert(function_id_ == 0);
+      id_to_at_reference_checks_[referenced_from_inst.id()].push_back(std::bind(
+          &BuiltInsValidator::ValidateNotCalledWithExecutionModel, this, 4336,
+          "Vulkan spec doesn't allow BuiltIn PrimitiveId to be used for "
+          "variables with Input storage class if execution model is "
+          "MeshNV.",
+          spv::ExecutionModel::MeshNV, decoration, built_in_inst,
+          referenced_from_inst, std::placeholders::_1));
+      id_to_at_reference_checks_[referenced_from_inst.id()].push_back(std::bind(
+          &BuiltInsValidator::ValidateNotCalledWithExecutionModel, this, 4336,
+          "Vulkan spec doesn't allow BuiltIn PrimitiveId to be used for "
+          "variables with Input storage class if execution model is "
+          "MeshEXT.",
+          spv::ExecutionModel::MeshEXT, decoration, built_in_inst,
+          referenced_from_inst, std::placeholders::_1));
+    }
+
     if (!_.HasCapability(spv::Capability::MeshShadingEXT) &&
         !_.HasCapability(spv::Capability::MeshShadingNV) &&
         !_.HasCapability(spv::Capability::Geometry) &&
@@ -3199,7 +3239,7 @@ spv_result_t BuiltInsValidator::ValidateMeshBuiltinInterfaceRules(
         if (_.GetIdOpcode(underlying_type) == spv::Op::OpTypeArray) {
           underlying_type = _.FindDef(underlying_type)->word(3u);
           if (!_.EvalConstantValUint64(underlying_type, &primitive_array_dim)) {
-            assert(0 && "Array type definition is corrupt");
+            primitive_array_dim = 0;
           }
         }
 
@@ -4514,6 +4554,18 @@ spv_result_t BuiltInsValidator::ValidateFragStencilRefAtReference(
                                    referenced_from_inst, execution_model);
       }
     }
+
+    for (const uint32_t entry_point : *entry_points_) {
+      const auto* modes = _.GetExecutionModes(entry_point);
+      if (!modes || !modes->count(spv::ExecutionMode::StencilRefReplacingEXT)) {
+        return _.diag(SPV_ERROR_INVALID_DATA, &referenced_from_inst)
+               << spvLogStringForEnv(_.context()->target_env)
+               << " spec requires StencilRefReplacingEXT execution mode to be "
+                  "declared when using BuiltIn FragStencilRefEXT. "
+               << GetReferenceDesc(decoration, built_in_inst, referenced_inst,
+                                   referenced_from_inst);
+      }
+    }
   }
 
   if (function_id_ == 0) {
@@ -5460,7 +5512,7 @@ spv_result_t BuiltInsValidator::Run() {
   for (const Instruction& inst : _.ordered_instructions()) {
     Update(inst);
 
-    std::set<uint32_t> already_checked;
+    already_checked_ids_.clear();
 
     for (const auto& operand : inst.operands()) {
       if (!spvIsIdType(operand.type)) {
@@ -5474,10 +5526,12 @@ spv_result_t BuiltInsValidator::Run() {
         continue;
       }
 
-      if (!already_checked.insert(id).second) {
+      if (std::find(already_checked_ids_.begin(), already_checked_ids_.end(),
+                    id) != already_checked_ids_.end()) {
         // The instruction has already referenced this id.
         continue;
       }
+      already_checked_ids_.push_back(id);
 
       // Instruction references the id. Run all checks associated with the id
       // on the instruction. id_to_at_reference_checks_ can be modified in the

@@ -56,6 +56,76 @@ bool IsAllowedTypeOrArrayOfSame(ValidationState_t& _, const Instruction& type,
   return false;
 }
 
+// Returns the SamplerHeapEXT/ResourceHeapEXT variable the pointer is derived
+// from, or null if it isn't derived from a heap
+const Instruction* FindDescriptorHeapVariable(ValidationState_t& _,
+                                              const Instruction* pointer) {
+  if (!pointer || !_.HasCapability(spv::Capability::DescriptorHeapEXT)) {
+    return nullptr;
+  }
+  uint32_t data_type = 0;
+  spv::StorageClass storage_class;
+  if (!_.GetPointerTypeInfo(pointer->type_id(), &data_type, &storage_class) ||
+      storage_class != spv::StorageClass::UniformConstant) {
+    return nullptr;
+  }
+  const Instruction* heap_variable = _.FindUntypedBaseVariable(pointer);
+  if (!heap_variable ||
+      (heap_variable->opcode() != spv::Op::OpUntypedVariableKHR &&
+       heap_variable->opcode() != spv::Op::OpVariable)) {
+    return nullptr;
+  }
+  if (!_.IsBuiltin(heap_variable->id(), spv::BuiltIn::SamplerHeapEXT) &&
+      !_.IsBuiltin(heap_variable->id(), spv::BuiltIn::ResourceHeapEXT)) {
+    return nullptr;
+  }
+  return heap_variable;
+}
+
+// SPV_EXT_descriptor_heap can only access the heap as a descriptor.
+// It does not support reading or writing it as a POD (int, struct, etc)
+// directly
+// details: https://gitlab.khronos.org/vulkan/vulkan/-/merge_requests/8631
+spv_result_t ValidateDescriptorHeapAccessType(ValidationState_t& _,
+                                              const Instruction* inst,
+                                              const Instruction* pointer,
+                                              const Instruction* type,
+                                              bool is_write = false) {
+  if (!spvIsVulkanEnv(_.context()->target_env)) {
+    return SPV_SUCCESS;
+  }
+  const Instruction* heap_variable = FindDescriptorHeapVariable(_, pointer);
+  if (!heap_variable) {
+    return SPV_SUCCESS;
+  }
+
+  // Each access is a single descriptor, an array of descriptors is not allowed.
+  // If using OpCopyMemorySized there is no type,
+  // so we can't prove it is reading a descriptor
+  if (type && _.IsDescriptorType(type->opcode())) {
+    return SPV_SUCCESS;
+  }
+
+  const bool sampler_heap =
+      _.IsBuiltin(heap_variable->id(), spv::BuiltIn::SamplerHeapEXT);
+
+  auto diag = _.diag(SPV_ERROR_INVALID_ID, inst);
+  diag << _.VkErrorID(13744) << "Op" << spvOpcodeString(inst->opcode())
+       << (is_write ? " writes to" : " reads") << " the variable <id> "
+       << _.getIdName(heap_variable->id()) << " decorated with "
+       << (sampler_heap ? "SamplerHeapEXT" : "ResourceHeapEXT");
+  if (type) {
+    diag << " as type <id> " << _.getIdName(type->id());
+  } else {
+    diag << " without a type";
+  }
+  diag << ". A descriptor heap only holds descriptors, so values accessed "
+          "through it must be a single descriptor type (OpTypeImage, "
+          "OpTypeSampler, OpTypeAccelerationStructureKHR, OpTypeTensorARM, or "
+          "OpTypeBufferEXT), an array of descriptors can't be accessed at once";
+  return diag;
+}
+
 // Returns true if the two instructions represent structs that, as far as the
 // validator can tell, have the exact same data layout.
 bool AreLayoutCompatibleStructs(ValidationState_t& _, const Instruction* type1,
@@ -466,12 +536,12 @@ spv_result_t ValidateVariableInitializer(ValidationState_t& _,
     }
   }
 
-  // Vulkan Appendix A: Check that if contains initializer, then
-  // storage class is Output, Private, or Function.
   if (inst->operands().size() > initializer_index &&
       storage_class != spv::StorageClass::Output &&
       storage_class != spv::StorageClass::Private &&
       storage_class != spv::StorageClass::Function) {
+    // Vulkan Appendix A: Check that if contains initializer, then
+    // storage class is Output, Private, or Function.
     if (spvIsVulkanEnv(_.context()->target_env)) {
       if (storage_class == spv::StorageClass::Workgroup) {
         auto init_id = inst->GetOperandAs<uint32_t>(initializer_index);
@@ -498,6 +568,15 @@ spv_result_t ValidateVariableInitializer(ValidationState_t& _,
                << "one of the following storage classes: Output, Private, "
                << "Function or Workgroup";
       }
+    }
+    // OpenCL SPIR-V Environment: An Initializer must not be present if Storage
+    // Class is Workgroup.
+    if (storage_class == spv::StorageClass::Workgroup &&
+        spvIsOpenCLEnv(_.context()->target_env)) {
+      return _.diag(SPV_ERROR_INVALID_ID, inst)
+             << "OpVariable, <id> " << _.getIdName(inst->id())
+             << ", initializers are not allowed in Workgroup storage class "
+                "in the OpenCL environment";
     }
   }
 
@@ -709,11 +788,38 @@ spv_result_t ValidateVariableVulkanDescriptor(ValidationState_t& _,
   // Vulkan Descriptor Set Interface: Check type of UniformConstant and
   // Uniform variables.
   if (storage_class == spv::StorageClass::UniformConstant) {
-    if (!IsAllowedTypeOrArrayOfSame(
-            _, pointee,
-            {spv::Op::OpTypeImage, spv::Op::OpTypeSampler,
-             spv::Op::OpTypeSampledImage, spv::Op::OpTypeTensorARM,
-             spv::Op::OpTypeAccelerationStructureKHR})) {
+    const bool sampler_heap =
+        _.IsBuiltin(inst->id(), spv::BuiltIn::SamplerHeapEXT);
+    const bool resource_heap =
+        _.IsBuiltin(inst->id(), spv::BuiltIn::ResourceHeapEXT);
+    if (sampler_heap || resource_heap) {
+      const bool allowed =
+          sampler_heap
+              ? IsAllowedTypeOrArrayOfSame(_, pointee, {spv::Op::OpTypeSampler})
+              : IsAllowedTypeOrArrayOfSame(
+                    _, pointee,
+                    {spv::Op::OpTypeImage, spv::Op::OpTypeTensorARM,
+                     spv::Op::OpTypeAccelerationStructureKHR,
+                     spv::Op::OpTypeBufferEXT});
+      if (!allowed) {
+        return _.diag(SPV_ERROR_INVALID_ID, inst)
+               << _.VkErrorID(sampler_heap ? 13746 : 13745)
+               << "UniformConstant OpVariable <id> " << _.getIdName(inst->id())
+               << " is decorated with "
+               << (sampler_heap ? "SamplerHeapEXT" : "ResourceHeapEXT")
+               << ", so it must either be an OpUntypedVariableKHR with no "
+                  "Data Type, or be typed as "
+               << (sampler_heap
+                       ? "OpTypeSampler or an array of OpTypeSampler"
+                       : "OpTypeImage, OpTypeAccelerationStructureKHR, "
+                         "OpTypeTensorARM, OpTypeBufferEXT, or an array of one "
+                         "of these types");
+      }
+    } else if (!IsAllowedTypeOrArrayOfSame(
+                   _, pointee,
+                   {spv::Op::OpTypeImage, spv::Op::OpTypeSampler,
+                    spv::Op::OpTypeSampledImage, spv::Op::OpTypeTensorARM,
+                    spv::Op::OpTypeAccelerationStructureKHR})) {
       return _.diag(SPV_ERROR_INVALID_ID, inst)
              << _.VkErrorID(4655) << "UniformConstant OpVariable <id> "
              << _.getIdName(inst->id()) << " has illegal type.\n"
@@ -904,7 +1010,7 @@ spv_result_t ValidateVariableVulkanLongVector(ValidationState_t& _,
              << _.VkErrorID(12297)
              << "Long vector types with more than 4 components (or types "
                 "containing them) not supported in storage class "
-             << StorageClassToString(storage_class);
+             << spv::StorageClassToString(storage_class);
     }
 
     if ((storage_class == spv::StorageClass::StorageBuffer ||
@@ -927,7 +1033,7 @@ spv_result_t ValidateVariableVulkanLongVector(ValidationState_t& _,
              << _.VkErrorID(12294)
              << "Long vector types with spec constant component count "
                 "not supported in storage class with explicit layout "
-             << StorageClassToString(storage_class);
+             << spv::StorageClassToString(storage_class);
     }
   } else {
     if ((storage_class != spv::StorageClass::Function &&
@@ -1197,6 +1303,28 @@ spv_result_t ValidateVariableTileImageEXT(ValidationState_t& _,
   }
 }
 
+spv_result_t ValidateUntypedVariableLengthArray(ValidationState_t& _,
+                                                const Instruction* inst) {
+  const auto result_type = _.FindDef(inst->type_id());
+  if (!result_type ||
+      result_type->opcode() != spv::Op::OpTypeUntypedPointerKHR ||
+      result_type->GetOperandAs<spv::StorageClass>(1u) !=
+          spv::StorageClass::Function) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << "Result Type must be an untyped pointer with Function storage "
+              "class";
+  }
+  if (!_.IsConcreteType(inst->GetOperandAs<uint32_t>(2u))) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << "Element Type must be a concrete type";
+  }
+  if (!_.IsIntScalarType(_.GetTypeId(inst->GetOperandAs<uint32_t>(3u)))) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << "Length must have a scalar integer type";
+  }
+  return SPV_SUCCESS;
+}
+
 spv_result_t ValidateVariable(ValidationState_t& _, const Instruction* inst) {
   const bool untyped_pointer = inst->opcode() == spv::Op::OpUntypedVariableKHR;
 
@@ -1227,6 +1355,18 @@ spv_result_t ValidateVariable(ValidationState_t& _, const Instruction* inst) {
         return _.diag(SPV_ERROR_INVALID_ID, inst)
                << "Data type must be a type instruction";
       }
+      // Untyped pointers are only permitted in storage classes with an explicit
+      // layout. UniformConstant only has an explicit layout if it is one of the
+      // heaps.
+      if (spvIsVulkanEnv(_.context()->target_env) &&
+          storage_class == spv::StorageClass::UniformConstant &&
+          !_.IsDescriptorHeapBaseVariable(inst)) {
+        return _.diag(SPV_ERROR_INVALID_ID, inst)
+               << _.VkErrorID(13706)
+               << "Storage class is UniformConstant, but Vulkan requires "
+                  "that an OpUntypedVariableKHR be decorated with "
+                  "SamplerHeapEXT or ResourceHeapEXT";
+      }
     } else {
       if (storage_class == spv::StorageClass::Function ||
           storage_class == spv::StorageClass::Private ||
@@ -1242,7 +1382,7 @@ spv_result_t ValidateVariable(ValidationState_t& _, const Instruction* inst) {
         if (storage_class != spv::StorageClass::UniformConstant) {
           return _.diag(SPV_ERROR_INVALID_ID, inst)
                  << _.VkErrorID(11167) << "Storage class is "
-                 << StorageClassToString(storage_class)
+                 << spv::StorageClassToString(storage_class)
                  << ", but Vulkan requires that Data Type be specified when "
                     "not using UniformConstant storage class";
         } else if (!(_.IsDescriptorHeapBaseVariable(inst))) {
@@ -1475,6 +1615,32 @@ spv_result_t ValidateLoad(ValidationState_t& _, const Instruction* inst) {
     }
   }
 
+  if (auto error =
+          ValidateDescriptorHeapAccessType(_, inst, pointer, result_type))
+    return error;
+
+  return SPV_SUCCESS;
+}
+
+spv_result_t ValidateStoredTypeNotOpaque(ValidationState_t& _,
+                                         const Instruction* inst,
+                                         uint32_t type_id) {
+  if (!spvIsVulkanEnv(_.context()->target_env) ||
+      _.options()->before_hlsl_legalization) {
+    return SPV_SUCCESS;
+  }
+  const auto isForbiddenType = [](const Instruction* type_inst) {
+    auto opcode = type_inst->opcode();
+    return opcode == spv::Op::OpTypeImage || opcode == spv::Op::OpTypeSampler ||
+           opcode == spv::Op::OpTypeSampledImage ||
+           opcode == spv::Op::OpTypeAccelerationStructureKHR;
+  };
+  if (_.ContainsType(type_id, isForbiddenType)) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << _.VkErrorID(6924)
+           << "Cannot store to OpTypeImage, OpTypeSampler, "
+              "OpTypeSampledImage, or OpTypeAccelerationStructureKHR objects";
+  }
   return SPV_SUCCESS;
 }
 
@@ -1619,21 +1785,8 @@ spv_result_t ValidateStore(ValidationState_t& _, const Instruction* inst) {
     }
   }
 
-  if (spvIsVulkanEnv(_.context()->target_env) &&
-      !_.options()->before_hlsl_legalization) {
-    const auto isForbiddenType = [](const Instruction* type_inst) {
-      auto opcode = type_inst->opcode();
-      return opcode == spv::Op::OpTypeImage ||
-             opcode == spv::Op::OpTypeSampler ||
-             opcode == spv::Op::OpTypeSampledImage ||
-             opcode == spv::Op::OpTypeAccelerationStructureKHR;
-    };
-    if (_.ContainsType(object_type->id(), isForbiddenType)) {
-      return _.diag(SPV_ERROR_INVALID_ID, inst)
-             << _.VkErrorID(6924)
-             << "Cannot store to OpTypeImage, OpTypeSampler, "
-                "OpTypeSampledImage, or OpTypeAccelerationStructureKHR objects";
-    }
+  if (auto error = ValidateStoredTypeNotOpaque(_, inst, object_type->id())) {
+    return error;
   }
 
   return SPV_SUCCESS;
@@ -1762,8 +1915,26 @@ spv_result_t ValidateCopyMemory(ValidationState_t& _, const Instruction* inst) {
              << "One of Source or Target must be a typed pointer";
     }
 
+    const auto copied_type = target_type ? target_type : source_type;
+    if (auto error = ValidateStoredTypeNotOpaque(_, inst, copied_type->id())) {
+      return error;
+    }
+
+    if (auto error =
+            ValidateDescriptorHeapAccessType(_, inst, source, copied_type))
+      return error;
+    if (auto error = ValidateDescriptorHeapAccessType(_, inst, target,
+                                                      copied_type, true))
+      return error;
+
     if (auto error = CheckMemoryAccess(_, inst, 2)) return error;
   } else {
+    if (auto error = ValidateDescriptorHeapAccessType(_, inst, source, nullptr))
+      return error;
+    if (auto error =
+            ValidateDescriptorHeapAccessType(_, inst, target, nullptr, true))
+      return error;
+
     const auto size_id = inst->GetOperandAs<uint32_t>(2);
     const auto size = _.FindDef(size_id);
     if (!size) {
@@ -1898,8 +2069,8 @@ spv_result_t ValidateCopyMemory(ValidationState_t& _, const Instruction* inst) {
             return _.diag(SPV_ERROR_INVALID_ID, inst)
                    << _.VkErrorID(11165)
                    << "Size must be a multiple of 4. This is valid if Source ("
-                   << StorageClassToString(source_sc) << ") and Target ("
-                   << StorageClassToString(source_sc)
+                   << spv::StorageClassToString(source_sc) << ") and Target ("
+                   << spv::StorageClassToString(target_sc)
                    << ") storage classes both support either 8-bit or 16-bit";
           }
           if (value % 2 != 0) {
@@ -1908,8 +2079,8 @@ spv_result_t ValidateCopyMemory(ValidationState_t& _, const Instruction* inst) {
                      << _.VkErrorID(11165)
                      << "Size must be a multiple of 2. This is valid if Source "
                         "("
-                     << StorageClassToString(source_sc) << ") and Target ("
-                     << StorageClassToString(source_sc)
+                     << spv::StorageClassToString(source_sc) << ") and Target ("
+                     << spv::StorageClassToString(target_sc)
                      << ") storage classes both support 8-bit";
             }
           }
@@ -2443,6 +2614,20 @@ spv_result_t ValidateArrayLength(ValidationState_t& state,
            << " must be a pointer to an OpTypeStruct.";
   }
 
+  if (untyped) {
+    if (const Instruction* heap_variable = FindDescriptorHeapVariable(
+            state, state.FindDef(inst->GetOperandAs<uint32_t>(3)))) {
+      return state.diag(SPV_ERROR_INVALID_ID, inst)
+             << "OpUntypedArrayLengthKHR Pointer must be a storage buffer "
+                "descriptor, but it is derived from the variable <id> "
+             << state.getIdName(heap_variable->id()) << " decorated with "
+             << (state.IsBuiltin(heap_variable->id(),
+                                 spv::BuiltIn::SamplerHeapEXT)
+                     ? "SamplerHeapEXT"
+                     : "ResourceHeapEXT");
+    }
+  }
+
   Instruction* structure_type = nullptr;
   if (untyped) {
     structure_type = state.FindDef(inst->GetOperandAs<uint32_t>(2));
@@ -2877,9 +3062,11 @@ spv_result_t ValidateBufferPointerEXT(ValidationState_t& _,
   }
 
   // Buffer operand
-  auto buffer =
-      _.FindUntypedBaseVariable(_.FindDef(inst->GetOperandAs<uint32_t>(2)));
-  if (!buffer || !_.IsBuiltin(buffer->id(), spv::BuiltIn::ResourceHeapEXT)) {
+  const uint32_t buffer_id = inst->GetOperandAs<uint32_t>(2);
+  auto buffer = _.FindUntypedBaseVariable(_.FindDef(buffer_id));
+  if (_.GetIdOpcode(_.GetTypeId(buffer_id)) !=
+          spv::Op::OpTypeUntypedPointerKHR ||
+      !buffer || !_.IsBuiltin(buffer->id(), spv::BuiltIn::ResourceHeapEXT)) {
     return _.diag(SPV_ERROR_INVALID_ID, inst)
            << "OpBufferPointerEXT's buffer must be an untyped pointer"
            << " into a variable declared with the ResourceHeapEXT built-in";
@@ -3604,6 +3791,19 @@ spv_result_t ValidatePtrComparison(ValidationState_t& _,
   const auto op2 = _.FindDef(inst->GetOperandAs<uint32_t>(3u));
   const auto op1_type = _.FindDef(op1->type_id());
   const auto op2_type = _.FindDef(op2->type_id());
+
+  if (!op1_type || (op1_type->opcode() != spv::Op::OpTypePointer &&
+                    op1_type->opcode() != spv::Op::OpTypeUntypedPointerKHR)) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << "Operand type must be a pointer";
+  }
+
+  if (!op2_type || (op2_type->opcode() != spv::Op::OpTypePointer &&
+                    op2_type->opcode() != spv::Op::OpTypeUntypedPointerKHR)) {
+    return _.diag(SPV_ERROR_INVALID_ID, inst)
+           << "Operand type must be a pointer";
+  }
+
   spv::StorageClass sc = op1_type->GetOperandAs<spv::StorageClass>(1u);
   if ((_.addressing_model() == spv::AddressingModel::Logical ||
        _.addressing_model() == spv::AddressingModel::PhysicalStorageBuffer64) &&
@@ -3625,18 +3825,6 @@ spv_result_t ValidatePtrComparison(ValidationState_t& _,
       return _.diag(SPV_ERROR_INVALID_ID, inst)
              << "Result Type must be OpTypeBool";
     }
-  }
-
-  if (!op1_type || (op1_type->opcode() != spv::Op::OpTypePointer &&
-                    op1_type->opcode() != spv::Op::OpTypeUntypedPointerKHR)) {
-    return _.diag(SPV_ERROR_INVALID_ID, inst)
-           << "Operand type must be a pointer";
-  }
-
-  if (!op2_type || (op2_type->opcode() != spv::Op::OpTypePointer &&
-                    op2_type->opcode() != spv::Op::OpTypeUntypedPointerKHR)) {
-    return _.diag(SPV_ERROR_INVALID_ID, inst)
-           << "Operand type must be a pointer";
   }
 
   if (inst->opcode() == spv::Op::OpPtrDiff) {
@@ -3834,6 +4022,8 @@ spv_result_t ValidatePredicatedStoreINTEL(ValidationState_t& _,
 
 spv_result_t MemoryPass(ValidationState_t& _, const Instruction* inst) {
   switch (inst->opcode()) {
+    case spv::Op::OpUntypedVariableLengthArrayINTEL:
+      return ValidateUntypedVariableLengthArray(_, inst);
     case spv::Op::OpVariable:
     case spv::Op::OpUntypedVariableKHR:
       return ValidateVariable(_, inst);

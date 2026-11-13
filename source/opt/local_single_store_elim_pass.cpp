@@ -29,6 +29,7 @@ constexpr uint32_t kVariableInitIdInIdx = 1;
 }  // namespace
 
 bool LocalSingleStoreElimPass::LocalSingleStoreElim(Function* func) {
+  if (func->IsDeclaration()) return false;
   bool modified = false;
 
   // Check all function scope variables in |func|.
@@ -92,6 +93,7 @@ void LocalSingleStoreElimPass::InitExtensionAllowList() {
       "SPV_AMD_shader_explicit_vertex_parameter",
       "SPV_AMD_shader_trinary_minmax",
       "SPV_AMD_gcn_shader",
+      "SPV_KHR_float_controls",
       "SPV_KHR_shader_ballot",
       "SPV_AMD_shader_ballot",
       "SPV_AMD_gpu_shader_half_float",

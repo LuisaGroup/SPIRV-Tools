@@ -29,6 +29,62 @@ using AggressiveDCETest = PassTest<::testing::Test>;
 
 using ::testing::HasSubstr;
 
+TEST_F(AggressiveDCETest, FloatControlsPreserved) {
+  // Float controls restrict live arithmetic; they do not make unused local
+  // arithmetic or stores observable. Keep the controls and NoContraction.
+  const std::string spirv = R"(
+; CHECK: OpCapability DenormPreserve
+; CHECK: OpCapability SignedZeroInfNanPreserve
+; CHECK: OpCapability RoundingModeRTE
+; CHECK: OpExtension "SPV_KHR_float_controls"
+; CHECK: OpExecutionMode {{%\w+}} DenormPreserve 32
+; CHECK: OpExecutionMode {{%\w+}} SignedZeroInfNanPreserve 32
+; CHECK: OpExecutionMode {{%\w+}} RoundingModeRTE 32
+; CHECK: OpDecorate [[sum:%\w+]] NoContraction
+; CHECK: OpFunction
+; CHECK-NOT: OpVariable
+; CHECK: [[value:%\w+]] = OpLoad
+; CHECK-NEXT: [[sum]] = OpFAdd {{%\w+}} [[value]]
+; CHECK-NEXT: OpStore
+; CHECK-NEXT: OpReturn
+               OpCapability Shader
+               OpCapability DenormPreserve
+               OpCapability SignedZeroInfNanPreserve
+               OpCapability RoundingModeRTE
+               OpExtension "SPV_KHR_float_controls"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %input %output
+               OpExecutionMode %main OriginUpperLeft
+               OpExecutionMode %main DenormPreserve 32
+               OpExecutionMode %main SignedZeroInfNanPreserve 32
+               OpExecutionMode %main RoundingModeRTE 32
+               OpDecorate %input Location 0
+               OpDecorate %output Location 0
+               OpDecorate %sum NoContraction
+       %void = OpTypeVoid
+      %float = OpTypeFloat 32
+         %fn = OpTypeFunction %void
+         %ip = OpTypePointer Input %float
+         %op = OpTypePointer Output %float
+         %fp = OpTypePointer Function %float
+      %input = OpVariable %ip Input
+     %output = OpVariable %op Output
+        %one = OpConstant %float 1
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+      %local = OpVariable %fp Function
+      %value = OpLoad %float %input
+       %dead = OpFAdd %float %value %one
+               OpStore %local %dead
+        %sum = OpFAdd %float %value %one
+               OpStore %output %sum
+               OpReturn
+               OpFunctionEnd
+  )";
+  SetTargetEnv(SPV_ENV_UNIVERSAL_1_3);
+  SinglePassRunAndMatch<AggressiveDCEPass>(spirv, true);
+}
+
 TEST_F(AggressiveDCETest, EliminateExtendedInst) {
   //  #version 140
   //
@@ -9256,6 +9312,63 @@ TEST_F(AggressiveDCETest, KeepDebugBuildIdentifier) {
                OpFunctionEnd
   )";
 
+  SinglePassRunAndMatch<AggressiveDCEPass>(spirv, true);
+}
+
+TEST_F(AggressiveDCETest, MemberDecorateIdEXT) {
+  const std::string spirv = R"(
+; CHECK: OpMemberDecorateId{{EXT|KHR}} %S 0 OffsetId{{EXT|KHR}} %offset
+; CHECK-NOT: OpMemberDecorateId
+; CHECK: %offset = OpSpecConstant %uint 4
+; CHECK-NOT: %dead_offset = OpSpecConstant
+; CHECK-NOT: %dead_S = OpTypeStruct
+OpCapability Shader
+OpCapability UntypedPointersKHR
+OpCapability DescriptorHeapEXT
+OpExtension "SPV_EXT_descriptor_heap"
+OpExtension "SPV_KHR_untyped_pointers"
+OpMemoryModel Logical GLSL450
+OpEntryPoint GLCompute %main "main" %heap %out
+OpExecutionMode %main LocalSize 1 1 1
+OpName %S "S"
+OpName %offset "offset"
+OpName %dead_S "dead_S"
+OpName %dead_offset "dead_offset"
+OpDecorate %heap BuiltIn ResourceHeapEXT
+OpMemberDecorateIdEXT %S 0 OffsetIdEXT %offset
+OpMemberDecorateIdEXT %dead_S 0 OffsetIdEXT %dead_offset
+OpDecorate %Out Block
+OpMemberDecorate %Out 0 Offset 0
+OpDecorate %out DescriptorSet 0
+OpDecorate %out Binding 0
+%void = OpTypeVoid
+%func = OpTypeFunction %void
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%offset = OpSpecConstant %uint 4
+%dead_offset = OpSpecConstant %uint 8
+%buf = OpTypeBufferEXT StorageBuffer
+%S = OpTypeStruct %buf
+%dead_S = OpTypeStruct %buf
+%ptr_uc = OpTypeUntypedPointerKHR UniformConstant
+%ptr_sb = OpTypeUntypedPointerKHR StorageBuffer
+%heap = OpUntypedVariableKHR %ptr_uc UniformConstant
+%Out = OpTypeStruct %uint
+%ptr_Out = OpTypePointer StorageBuffer %Out
+%ptr_uint = OpTypePointer StorageBuffer %uint
+%out = OpVariable %ptr_Out StorageBuffer
+%main = OpFunction %void None %func
+%entry = OpLabel
+%desc = OpUntypedAccessChainKHR %ptr_uc %S %heap %uint_0
+%b = OpBufferPointerEXT %ptr_sb %desc
+%v = OpLoad %uint %b
+%o = OpAccessChain %ptr_uint %out %uint_0
+OpStore %o %v
+OpReturn
+OpFunctionEnd
+)";
+
+  SetTargetEnv(SPV_ENV_UNIVERSAL_1_6);
   SinglePassRunAndMatch<AggressiveDCEPass>(spirv, true);
 }
 

@@ -385,7 +385,7 @@ spv_result_t ValidateDecorate(ValidationState_t& _, const Instruction* inst) {
   if (DecorationTakesIdParameters(decoration)) {
     return _.diag(SPV_ERROR_INVALID_ID, inst)
            << "Decorations taking ID parameters may not be used with "
-              "OpDecorateId";
+              "OpDecorate";
   }
 
   if (target->opcode() != spv::Op::OpDecorationGroup) {
@@ -409,7 +409,7 @@ spv_result_t ValidateDecorateId(ValidationState_t& _, const Instruction* inst) {
   const auto target = _.FindDef(target_id);
   if (target && spv::Op::OpDecorationGroup == target->opcode()) {
     return _.diag(SPV_ERROR_INVALID_ID, inst)
-           << "OpMemberDecorate Target <id> " << _.getIdName(target_id)
+           << "OpDecorateId Target <id> " << _.getIdName(target_id)
            << " must not be an OpDecorationGroup instruction.";
   }
 
@@ -434,6 +434,11 @@ spv_result_t ValidateDecorateId(ValidationState_t& _, const Instruction* inst) {
         return _.diag(SPV_ERROR_INVALID_ID, inst)
                << "ArrayStrideIdEXT extra operand must be a 32-bit int "
                   "scalar type.";
+      }
+      if (!spvOpcodeIsConstant(_.GetIdOpcode(operand_id))) {
+        return _.diag(SPV_ERROR_INVALID_ID, inst)
+               << "ArrayStrideIdEXT extra operand must be a constant "
+                  "instruction.";
       }
 
       // Even if spec constant, validation layers will test when frozen
@@ -534,6 +539,10 @@ spv_result_t ValidateMemberDecorate(ValidationState_t& _,
       if (!_.IsIntScalarType(_.GetTypeId(operand_id), 32)) {
         return _.diag(SPV_ERROR_INVALID_ID, inst)
                << "OffsetIdEXT extra operand must be a 32-bit int scalar type.";
+      }
+      if (!spvOpcodeIsConstant(_.GetIdOpcode(operand_id))) {
+        return _.diag(SPV_ERROR_INVALID_ID, inst)
+               << "OffsetIdEXT extra operand must be a constant instruction.";
       }
       if (!_.ContainsType(struct_type_id, is_descriptor_type, true)) {
         return _.diag(SPV_ERROR_INVALID_ID, inst)

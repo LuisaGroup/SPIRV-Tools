@@ -1417,6 +1417,124 @@ TEST_F(CCPTest, CooperativeMatrixReplicateIsNotNull) {
   SinglePassRunAndMatch<CCPPass>(text, true);
 }
 
+// Test that inserting into an OpConstantNull of an array type folds to a
+// composite with the correct number of elements, instead of crashing.
+TEST_F(CCPTest, CompositeInsertIntoNullArray) {
+  const std::string text = R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+       %uint = OpTypeInt 32 0
+     %uint_2 = OpConstant %uint 2
+    %float_1 = OpConstant %float 1
+; CHECK: [[arr:%\w+]] = OpTypeArray %float %uint_2
+        %arr = OpTypeArray %float %uint_2
+       %null = OpConstantNull %arr
+; CHECK: [[null_float:%\w+]] = OpConstantNull %float
+; CHECK: [[folded:%\w+]] = OpConstantComposite [[arr]] [[null_float]] %float_1
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+        %ins = OpCompositeInsert %arr %float_1 %null 1
+; CHECK: OpCopyObject [[arr]] [[folded]]
+       %copy = OpCopyObject %arr %ins
+               OpReturn
+               OpFunctionEnd
+)";
+
+  auto result = SinglePassRunAndMatch<CCPPass>(text, true);
+  EXPECT_EQ(std::get<1>(result), Pass::Status::SuccessWithChange);
+}
+
+// Test that a null array whose length is a spec constant, or too long to be
+// encoded as an OpConstantComposite, is not expanded.
+TEST_F(CCPTest, CompositeInsertIntoNullArrayNotExpanded) {
+  const std::string text = R"(
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %spec_2 SpecId 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+      %float = OpTypeFloat 32
+       %uint = OpTypeInt 32 0
+     %spec_2 = OpSpecConstant %uint 2
+ %uint_70000 = OpConstant %uint 70000
+    %float_1 = OpConstant %float 1
+   %spec_arr = OpTypeArray %float %spec_2
+    %big_arr = OpTypeArray %float %uint_70000
+  %spec_null = OpConstantNull %spec_arr
+   %big_null = OpConstantNull %big_arr
+; CHECK-NOT: OpConstantComposite
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+; CHECK: OpCompositeInsert {{%\w+}} %float_1 {{%\w+}} 1
+; CHECK: OpCompositeInsert {{%\w+}} %float_1 {{%\w+}} 1
+   %spec_ins = OpCompositeInsert %spec_arr %float_1 %spec_null 1
+    %big_ins = OpCompositeInsert %big_arr %float_1 %big_null 1
+               OpReturn
+               OpFunctionEnd
+)";
+
+  SinglePassRunAndMatch<CCPPass>(text, true);
+}
+
+TEST_F(CCPTest, DontFoldToConstantsOfStorageOnlyTypes) {
+  // Only the storage capabilities are declared, so 8- and 16-bit constants
+  // are not allowed and the conversions must not be folded.
+  const std::string text = R"(
+               OpCapability Shader
+               OpCapability StorageBuffer8BitAccess
+               OpCapability StorageBuffer16BitAccess
+               OpExtension "SPV_KHR_8bit_storage"
+               OpExtension "SPV_KHR_16bit_storage"
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint GLCompute %main "main"
+               OpExecutionMode %main LocalSize 1 1 1
+               OpDecorate %Block Block
+               OpMemberDecorate %Block 0 Offset 0
+               OpMemberDecorate %Block 1 Offset 2
+               OpDecorate %buf DescriptorSet 0
+               OpDecorate %buf Binding 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+       %uint = OpTypeInt 32 0
+        %int = OpTypeInt 32 1
+      %uchar = OpTypeInt 8 0
+      %short = OpTypeInt 16 1
+     %uint_0 = OpConstant %uint 0
+     %uint_1 = OpConstant %uint 1
+     %uint_9 = OpConstant %uint 9
+     %int_n3 = OpConstant %int -3
+      %Block = OpTypeStruct %uchar %short
+    %ptr_blk = OpTypePointer StorageBuffer %Block
+  %ptr_uchar = OpTypePointer StorageBuffer %uchar
+  %ptr_short = OpTypePointer StorageBuffer %short
+        %buf = OpVariable %ptr_blk StorageBuffer
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+; CHECK-NOT: OpConstant %uchar
+; CHECK-NOT: OpConstant %short
+; CHECK: OpUConvert %uchar %uint_9
+; CHECK: OpSConvert %short %int_n3
+          %c = OpUConvert %uchar %uint_9
+          %s = OpSConvert %short %int_n3
+          %p = OpAccessChain %ptr_uchar %buf %uint_0
+               OpStore %p %c
+          %q = OpAccessChain %ptr_short %buf %uint_1
+               OpStore %q %s
+               OpReturn
+               OpFunctionEnd
+)";
+
+  auto result = SinglePassRunAndMatch<CCPPass>(text, true);
+  EXPECT_EQ(std::get<1>(result), Pass::Status::SuccessWithoutChange);
+}
+
 }  // namespace
 }  // namespace opt
 }  // namespace spvtools

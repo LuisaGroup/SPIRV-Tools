@@ -834,6 +834,8 @@ spv_result_t ValidateImageOperands(ValidationState_t& _,
 
   if (mask & uint32_t(spv::ImageOperandsMask::Offsets)) {
     // TODO: add validation
+    // Skip the operand so the ones after it are read from the right word.
+    word_index++;
   }
 
   if (mask & uint32_t(spv::ImageOperandsMask::Nontemporal)) {
@@ -1455,10 +1457,12 @@ spv_result_t ValidateImageTexelPointer(ValidationState_t& _,
   bool isUntyped = (inst->opcode() == spv::Op::OpUntypedImageTexelPointerEXT);
 
   const auto result_type = _.FindDef(inst->type_id());
-  if (result_type->opcode() != spv::Op::OpTypePointer &&
-      result_type->opcode() != spv::Op::OpTypeUntypedPointerKHR) {
+  const spv::Op expected_pointer =
+      isUntyped ? spv::Op::OpTypeUntypedPointerKHR : spv::Op::OpTypePointer;
+  if (result_type->opcode() != expected_pointer) {
     return _.diag(SPV_ERROR_INVALID_DATA, inst)
-           << "Expected Result Type to be a pointer";
+           << "Expected Result Type to be a pointer declared with Op"
+           << spvOpcodeString(expected_pointer);
   }
 
   const auto storage_class = result_type->GetOperandAs<spv::StorageClass>(1);

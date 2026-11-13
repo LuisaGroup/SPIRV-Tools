@@ -24,6 +24,60 @@ namespace {
 
 using LocalSingleStoreElimTest = PassTest<::testing::Test>;
 
+TEST_F(LocalSingleStoreElimTest, FloatControlsPreserved) {
+  const std::string spirv = R"(
+; CHECK: OpCapability DenormPreserve
+; CHECK: OpCapability SignedZeroInfNanPreserve
+; CHECK: OpCapability RoundingModeRTE
+; CHECK: OpExtension "SPV_KHR_float_controls"
+; CHECK: OpExecutionMode {{%\w+}} DenormPreserve 32
+; CHECK: OpExecutionMode {{%\w+}} SignedZeroInfNanPreserve 32
+; CHECK: OpExecutionMode {{%\w+}} RoundingModeRTE 32
+; CHECK: OpDecorate [[sum:%\w+]] NoContraction
+OpCapability Shader
+OpCapability DenormPreserve
+OpCapability SignedZeroInfNanPreserve
+OpCapability RoundingModeRTE
+OpExtension "SPV_KHR_float_controls"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main" %input %output
+OpExecutionMode %main OriginUpperLeft
+OpExecutionMode %main DenormPreserve 32
+OpExecutionMode %main SignedZeroInfNanPreserve 32
+OpExecutionMode %main RoundingModeRTE 32
+OpDecorate %input Location 0
+OpDecorate %output Location 0
+OpDecorate %sum NoContraction
+%void = OpTypeVoid
+%float = OpTypeFloat 32
+%fn = OpTypeFunction %void
+%ip = OpTypePointer Input %float
+%op = OpTypePointer Output %float
+%fp = OpTypePointer Function %float
+%input = OpVariable %ip Input
+%output = OpVariable %op Output
+%one = OpConstant %float 1
+; CHECK: OpFunction
+; CHECK: [[value:%\w+]] = OpLoad {{%\w+}} {{%\w+}}
+; CHECK-NEXT: [[sum]] = OpFAdd {{%\w+}} [[value]]
+; CHECK-NEXT: OpStore {{%\w+}} [[sum]]
+; CHECK-NEXT: OpStore {{%\w+}} [[sum]]
+; CHECK-NEXT: OpReturn
+%main = OpFunction %void None %fn
+%entry = OpLabel
+%local = OpVariable %fp Function
+%value = OpLoad %float %input
+%sum = OpFAdd %float %value %one
+OpStore %local %sum
+%loaded = OpLoad %float %local
+OpStore %output %loaded
+OpReturn
+OpFunctionEnd
+  )";
+  SetTargetEnv(SPV_ENV_UNIVERSAL_1_3);
+  SinglePassRunAndMatch<LocalSingleStoreElimPass>(spirv, true);
+}
+
 TEST_F(LocalSingleStoreElimTest, DoSomethingWithExtensions) {
   const std::string capabilities_and_extensions =
       R"(OpCapability Shader
@@ -1850,6 +1904,36 @@ TEST_F(LocalSingleStoreElimTest, VkMemoryModelTest) {
 )";
 
   SinglePassRunAndMatch<LocalSingleStoreElimPass>(text, false);
+}
+
+TEST_F(LocalSingleStoreElimTest, FunctionDeclaration) {
+  // The pass must skip the declaration 'ext', which has no blocks.
+  const std::string text = R"(OpCapability Linkage
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %1 "main" %2
+OpExecutionMode %1 OriginUpperLeft
+OpDecorate %3 LinkageAttributes "ext" Import
+OpDecorate %2 Location 0
+%void = OpTypeVoid
+%5 = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%8 = OpTypeFunction %v4float
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+%2 = OpVariable %_ptr_Output_v4float Output
+%3 = OpFunction %v4float None %8
+OpFunctionEnd
+%1 = OpFunction %void None %5
+%10 = OpLabel
+%11 = OpFunctionCall %v4float %3
+OpStore %2 %11
+OpReturn
+OpFunctionEnd
+)";
+
+  SetAssembleOptions(SPV_TEXT_TO_BINARY_OPTION_PRESERVE_NUMERIC_IDS);
+  SinglePassRunAndCheck<LocalSingleStoreElimPass>(text, text, true, true);
 }
 
 // TODO(greg-lunarg): Add tests to verify handling of these cases:

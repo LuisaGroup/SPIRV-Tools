@@ -24,6 +24,36 @@ namespace {
 
 using FusionPassTest = PassTest<::testing::Test>;
 
+TEST_F(FusionPassTest, FunctionDeclaration) {
+  // The pass must skip the declaration 'ext', which has no blocks.
+  const std::string text = R"(OpCapability Linkage
+OpCapability Shader
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %1 "main" %2
+OpExecutionMode %1 OriginUpperLeft
+OpDecorate %3 LinkageAttributes "ext" Import
+OpDecorate %2 Location 0
+%void = OpTypeVoid
+%5 = OpTypeFunction %void
+%float = OpTypeFloat 32
+%v4float = OpTypeVector %float 4
+%8 = OpTypeFunction %v4float
+%_ptr_Output_v4float = OpTypePointer Output %v4float
+%2 = OpVariable %_ptr_Output_v4float Output
+%3 = OpFunction %v4float None %8
+OpFunctionEnd
+%1 = OpFunction %void None %5
+%10 = OpLabel
+%11 = OpFunctionCall %v4float %3
+OpStore %2 %11
+OpReturn
+OpFunctionEnd
+)";
+
+  SetAssembleOptions(SPV_TEXT_TO_BINARY_OPTION_PRESERVE_NUMERIC_IDS);
+  SinglePassRunAndCheck<LoopFusionPass>(text, text, true, true, 20);
+}
+
 /*
 Generated from the following GLSL + --eliminate-local-multi-store
 
@@ -710,6 +740,80 @@ TEST_F(FusionPassTest, TooManyRegisters) {
   )";
 
   SinglePassRunAndMatch<LoopFusionPass>(text, true, 5);
+}
+
+// Test from https://github.com/KhronosGroup/SPIRV-Tools/issues/6964. The first
+// two subscripts give an empty constraint, which the third must keep empty.
+TEST_F(FusionPassTest, EmptyConstraintFromCoupledSubscripts) {
+  const std::string text = R"(
+; CHECK: OpLoopMerge
+; CHECK-NOT: OpLoopMerge
+; CHECK: OpFunctionEnd
+
+               OpCapability Shader
+               OpMemoryModel Logical GLSL450
+               OpEntryPoint Fragment %main "main" %out
+               OpExecutionMode %main OriginUpperLeft
+               OpDecorate %out Location 0
+       %void = OpTypeVoid
+         %fn = OpTypeFunction %void
+       %bool = OpTypeBool
+        %int = OpTypeInt 32 1
+      %float = OpTypeFloat 32
+         %c0 = OpConstant %int 0
+         %c1 = OpConstant %int 1
+        %c10 = OpConstant %int 10
+        %c12 = OpConstant %int 12
+    %float_1 = OpConstant %float 1
+         %t0 = OpTypeArray %float %c12
+         %t1 = OpTypeArray %t0 %c12
+         %t2 = OpTypeArray %t1 %c12
+         %pq = OpTypePointer Function %t2
+         %pf = OpTypePointer Function %float
+         %po = OpTypePointer Output %float
+        %out = OpVariable %po Output
+       %main = OpFunction %void None %fn
+      %entry = OpLabel
+          %q = OpVariable %pq Function
+               OpBranch %h0
+         %h0 = OpLabel
+         %j0 = OpPhi %int %c0 %entry %n0 %k0
+               OpLoopMerge %m0 %k0 None
+               OpBranch %d0
+         %d0 = OpLabel
+        %cc0 = OpSLessThan %bool %j0 %c10
+               OpBranchConditional %cc0 %b0 %m0
+         %b0 = OpLabel
+         %p0 = OpAccessChain %pf %q %c0 %c1 %j0
+               OpStore %p0 %float_1
+               OpBranch %k0
+         %k0 = OpLabel
+         %n0 = OpIAdd %int %j0 %c1
+               OpBranch %h0
+         %m0 = OpLabel
+               OpBranch %h1
+         %h1 = OpLabel
+         %j1 = OpPhi %int %c0 %m0 %n1 %k1
+               OpLoopMerge %m1 %k1 None
+               OpBranch %d1
+         %d1 = OpLabel
+        %cc1 = OpSLessThan %bool %j1 %c10
+               OpBranchConditional %cc1 %b1 %m1
+         %b1 = OpLabel
+         %x4 = OpIAdd %int %j1 %c1
+         %p1 = OpAccessChain %pf %q %x4 %j1 %c0
+         %v1 = OpLoad %float %p1
+               OpStore %out %v1
+               OpBranch %k1
+         %k1 = OpLabel
+         %n1 = OpIAdd %int %j1 %c1
+               OpBranch %h1
+         %m1 = OpLabel
+               OpReturn
+               OpFunctionEnd
+  )";
+
+  SinglePassRunAndMatch<LoopFusionPass>(text, true, 100);
 }
 
 }  // namespace

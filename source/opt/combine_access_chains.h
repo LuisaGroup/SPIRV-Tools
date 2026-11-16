@@ -53,17 +53,23 @@ class CombineAccessChains : public Pass {
   // Returns the array stride of |inst|'s type.
   uint32_t GetArrayStride(const Instruction* inst);
 
-  // Returns the type by resolving the index operands |inst|. |inst| must be an
-  // access chain instruction.
-  const analysis::Type* GetIndexedType(Instruction* inst);
+  // Returns the type that the last index operand of |inst| indexes into. |inst|
+  // must be an access chain instruction.
+  const analysis::Type* GetTypeIndexedByLastIndex(Instruction* inst);
 
   // Populates |new_operands| with the operands for the combined access chain.
   // Returns false if the access chains cannot be combined.
   Status CreateNewInputOperands(Instruction* ptr_input, Instruction* inst,
                                 std::vector<Operand>* new_operands);
 
-  // Combines the last index of |ptr_input| with the element operand of |inst|.
-  // Adds the combined operand to |new_operands|.
+  // Returns true if the last index of |ptr_input| can be added to the element
+  // operand of a pointer access chain whose base is |ptr_input|.
+  bool CanCombineLastIndexWithElement(Instruction* ptr_input);
+
+  // Adds an OpIAdd of the last index of |ptr_input| and the element operand of
+  // |inst| before |inst|, and appends its id to |new_operands|. |inst| must be
+  // a pointer access chain. Returns SuccessWithoutChange if the two cannot be
+  // combined.
   Status CombineIndices(Instruction* ptr_input, Instruction* inst,
                         std::vector<Operand>* new_operands);
 

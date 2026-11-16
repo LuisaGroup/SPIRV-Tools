@@ -26,10 +26,12 @@ using CombineAccessChainsTest = PassTest<::testing::Test>;
 TEST_F(CombineAccessChainsTest, PtrAccessChainFromAccessChainConstant) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int0:%\w+]] = OpConstant [[int]] 0
 ; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: OpAccessChain [[ptr_int]] [[var]] [[int3]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int0]] [[int3]]
+; CHECK: OpAccessChain [[ptr_int]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -60,10 +62,12 @@ OpFunctionEnd
 TEST_F(CombineAccessChainsTest, PtrAccessChainFromInBoundsAccessChainConstant) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int0:%\w+]] = OpConstant [[int]] 0
 ; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: OpAccessChain [[ptr_int]] [[var]] [[int3]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int0]] [[int3]]
+; CHECK: OpAccessChain [[ptr_int]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -94,10 +98,11 @@ OpFunctionEnd
 TEST_F(CombineAccessChainsTest, PtrAccessChainFromAccessChainCombineConstant) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int1:%\w+]] = OpConstant [[int]] 1
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int2:%\w+]] = OpConstant [[int]] 2
-; CHECK: OpAccessChain [[ptr_int]] [[var]] [[int2]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int1]] [[int1]]
+; CHECK: OpAccessChain [[ptr_int]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -167,12 +172,14 @@ OpFunctionEnd
 TEST_F(CombineAccessChainsTest, PtrAccessChainFromAccessChainExtraIndices) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int0:%\w+]] = OpConstant [[int]] 0
 ; CHECK: [[int1:%\w+]] = OpConstant [[int]] 1
 ; CHECK: [[int2:%\w+]] = OpConstant [[int]] 2
 ; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: OpAccessChain [[ptr_int]] [[var]] [[int1]] [[int2]] [[int3]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int0]] [[int2]]
+; CHECK: OpAccessChain [[ptr_int]] [[var]] [[int1]] [[add]] [[int3]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -214,8 +221,8 @@ TEST_F(CombineAccessChainsTest,
 ; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int6:%\w+]] = OpConstant [[int]] 6
-; CHECK: OpPtrAccessChain [[ptr_int]] [[var]] [[int6]] [[int3]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int3]] [[int3]]
+; CHECK: OpPtrAccessChain [[ptr_int]] [[var]] [[add]] [[int3]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -247,12 +254,13 @@ TEST_F(CombineAccessChainsTest,
        PtrAccessChainFromPtrAccessChainOnlyElementOperand) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[int4:%\w+]] = OpConstant [[int]] 4
 ; CHECK: [[array:%\w+]] = OpTypeArray [[int]] [[int4]]
 ; CHECK: [[ptr_array:%\w+]] = OpTypePointer Workgroup [[array]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int6:%\w+]] = OpConstant [[int]] 6
-; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[int6]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int3]] [[int3]]
+; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -284,10 +292,12 @@ TEST_F(CombineAccessChainsTest,
        PtrAccessChainFromPtrAccessCombineNonElementIndex) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int0:%\w+]] = OpConstant [[int]] 0
 ; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[ptr_int:%\w+]] = OpTypePointer Workgroup [[int]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: OpPtrAccessChain [[ptr_int]] [[var]] [[int3]] [[int3]] [[int3]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int0]] [[int3]]
+; CHECK: OpPtrAccessChain [[ptr_int]] [[var]] [[int3]] [[add]] [[int3]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -466,12 +476,15 @@ OpFunctionEnd
   SinglePassRunAndMatch<CombineAccessChains>(text, true);
 }
 
-TEST_F(CombineAccessChainsTest, DontCombineNonConstantStructSlide) {
+// The last index of the feeder selects an element of an array of structs, so it
+// is added to a non-constant element operand.
+TEST_F(CombineAccessChainsTest, CombineNonConstantElementWithArrayOfStructs) {
   const std::string text = R"(
 ; CHECK: [[int0:%\w+]] = OpConstant {{%\w+}} 0
+; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
 ; CHECK: [[ld:%\w+]] = OpLoad
-; CHECK: [[gep:%\w+]] = OpAccessChain
-; CHECK: OpPtrAccessChain {{%\w+}} [[gep]] [[ld]] [[int0]]
+; CHECK: [[add:%\w+]] = OpIAdd {{%\w+}} [[int0]] [[ld]]
+; CHECK: OpAccessChain {{%\w+}} [[var]] [[add]] [[int0]]
 OpCapability Shader
 OpCapability VariablePointers
 OpExtension "SPV_KHR_variable_pointers"
@@ -539,15 +552,84 @@ OpFunctionEnd
   SinglePassRunAndMatch<CombineAccessChains>(text, true);
 }
 
+// The last index of the feeder selects a struct member, so it is not combined
+// with a constant element operand.
+TEST_F(CombineAccessChainsTest, DontCombineStructMemberWithConstantElement) {
+  const std::string text = R"(
+; CHECK: [[int2:%\w+]] = OpConstant {{%\w+}} 2
+; CHECK: [[gep:%\w+]] = OpAccessChain
+; CHECK: OpPtrAccessChain {{%\w+}} [[gep]] [[int2]]
+OpCapability Shader
+OpCapability VariablePointers
+OpExtension "SPV_KHR_variable_pointers"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpExecutionMode %main OriginUpperLeft
+%void = OpTypeVoid
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%uint_2 = OpConstant %uint 2
+%struct = OpTypeStruct %uint %uint
+%ptr_Workgroup_uint = OpTypePointer Workgroup %uint
+%ptr_Workgroup_struct = OpTypePointer Workgroup %struct
+%wg_var = OpVariable %ptr_Workgroup_struct Workgroup
+%void_func = OpTypeFunction %void
+%main = OpFunction %void None %void_func
+%1 = OpLabel
+%gep = OpAccessChain %ptr_Workgroup_uint %wg_var %uint_0
+%ptr_gep = OpPtrAccessChain %ptr_Workgroup_uint %gep %uint_2
+OpReturn
+OpFunctionEnd
+)";
+
+  SinglePassRunAndMatch<CombineAccessChains>(text, true);
+}
+
+// The last index of the feeder selects a struct member, so it is not combined
+// with a non-constant element operand.
+TEST_F(CombineAccessChainsTest, DontCombineStructMemberWithNonConstantElement) {
+  const std::string text = R"(
+; CHECK: [[ld:%\w+]] = OpLoad
+; CHECK: [[gep:%\w+]] = OpAccessChain
+; CHECK: OpPtrAccessChain {{%\w+}} [[gep]] [[ld]]
+OpCapability Shader
+OpCapability VariablePointers
+OpExtension "SPV_KHR_variable_pointers"
+OpMemoryModel Logical GLSL450
+OpEntryPoint Fragment %main "main"
+OpExecutionMode %main OriginUpperLeft
+%void = OpTypeVoid
+%uint = OpTypeInt 32 0
+%uint_0 = OpConstant %uint 0
+%struct = OpTypeStruct %uint %uint
+%ptr_Workgroup_uint = OpTypePointer Workgroup %uint
+%ptr_Function_uint = OpTypePointer Function %uint
+%ptr_Workgroup_struct = OpTypePointer Workgroup %struct
+%wg_var = OpVariable %ptr_Workgroup_struct Workgroup
+%void_func = OpTypeFunction %void
+%main = OpFunction %void None %void_func
+%1 = OpLabel
+%func_var = OpVariable %ptr_Function_uint Function
+%ld = OpLoad %uint %func_var
+%gep = OpAccessChain %ptr_Workgroup_uint %wg_var %uint_0
+%ptr_gep = OpPtrAccessChain %ptr_Workgroup_uint %gep %ld
+OpReturn
+OpFunctionEnd
+)";
+
+  SinglePassRunAndMatch<CombineAccessChains>(text, true);
+}
+
 TEST_F(CombineAccessChainsTest, PtrAccessChainFromInBoundsPtrAccessChain) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[int4:%\w+]] = OpConstant [[int]] 4
 ; CHECK: [[array:%\w+]] = OpTypeArray [[int]] [[int4]]
 ; CHECK: [[ptr_array:%\w+]] = OpTypePointer Workgroup [[array]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int6:%\w+]] = OpConstant [[int]] 6
-; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[int6]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int3]] [[int3]]
+; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
@@ -580,12 +662,13 @@ OpFunctionEnd
 TEST_F(CombineAccessChainsTest, InBoundsPtrAccessChainFromPtrAccessChain) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[int4:%\w+]] = OpConstant [[int]] 4
 ; CHECK: [[array:%\w+]] = OpTypeArray [[int]] [[int4]]
 ; CHECK: [[ptr_array:%\w+]] = OpTypePointer Workgroup [[array]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int6:%\w+]] = OpConstant [[int]] 6
-; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[int6]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int3]] [[int3]]
+; CHECK: OpPtrAccessChain [[ptr_array]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
@@ -619,12 +702,13 @@ TEST_F(CombineAccessChainsTest,
        InBoundsPtrAccessChainFromInBoundsPtrAccessChain) {
   const std::string text = R"(
 ; CHECK: [[int:%\w+]] = OpTypeInt 32 0
+; CHECK: [[int3:%\w+]] = OpConstant [[int]] 3
 ; CHECK: [[int4:%\w+]] = OpConstant [[int]] 4
 ; CHECK: [[array:%\w+]] = OpTypeArray [[int]] [[int4]]
 ; CHECK: [[ptr_array:%\w+]] = OpTypePointer Workgroup [[array]]
 ; CHECK: [[var:%\w+]] = OpVariable {{%\w+}} Workgroup
-; CHECK: [[int6:%\w+]] = OpConstant [[int]] 6
-; CHECK: OpInBoundsPtrAccessChain [[ptr_array]] [[var]] [[int6]]
+; CHECK: [[add:%\w+]] = OpIAdd [[int]] [[int3]] [[int3]]
+; CHECK: OpInBoundsPtrAccessChain [[ptr_array]] [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses
@@ -740,9 +824,11 @@ OpFunctionEnd
 TEST_F(CombineAccessChainsTest, CombineMixedSign) {
   const std::string text = R"(
 ; CHECK: [[uint:%\w+]] = OpTypeInt 32 0
+; CHECK: [[uint1:%\w+]] = OpConstant [[uint]] 1
+; CHECK: [[int1:%\w+]] = OpConstant {{%\w+}} 1
 ; CHECK: [[var:%\w+]] = OpVariable
-; CHECK: [[uint2:%\w+]] = OpConstant [[uint]] 2
-; CHECK: OpInBoundsPtrAccessChain {{%\w+}} [[var]] [[uint2]]
+; CHECK: [[add:%\w+]] = OpIAdd [[uint]] [[uint1]] [[int1]]
+; CHECK: OpInBoundsPtrAccessChain {{%\w+}} [[var]] [[add]]
 OpCapability Shader
 OpCapability VariablePointers
 OpCapability Addresses

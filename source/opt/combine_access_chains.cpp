@@ -101,7 +101,8 @@ uint32_t CombineAccessChains::GetArrayStride(const Instruction* inst) {
   return array_stride;
 }
 
-const analysis::Type* CombineAccessChains::GetIndexedType(Instruction* inst) {
+const analysis::Type* CombineAccessChains::GetTypeIndexedByLastIndex(
+    Instruction* inst) {
   analysis::DefUseManager* def_use_mgr = context()->get_def_use_mgr();
   analysis::TypeManager* type_mgr = context()->get_type_mgr();
 
@@ -116,7 +117,7 @@ const analysis::Type* CombineAccessChains::GetIndexedType(Instruction* inst) {
     // resolution.
     starting_index = 2;
   }
-  for (uint32_t i = starting_index; i < inst->NumInOperands(); ++i) {
+  for (uint32_t i = starting_index; i < inst->NumInOperands() - 1; ++i) {
     Instruction* index_inst =
         def_use_mgr->GetDef(inst->GetSingleWordInOperand(i));
     const analysis::Constant* index_constant =
@@ -133,55 +134,43 @@ const analysis::Type* CombineAccessChains::GetIndexedType(Instruction* inst) {
   return type;
 }
 
+bool CombineAccessChains::CanCombineLastIndexWithElement(
+    Instruction* ptr_input) {
+  // The only index of |ptr_input| is its own element operand.
+  if (IsPtrAccessChain(ptr_input->opcode()) &&
+      ptr_input->NumInOperands() == 2) {
+    return true;
+  }
+  // Adding the element index to an index into a struct is generally not valid.
+  // The element index is treating the pointer like an array with equal step
+  // for each index. For a struct the offset from one member to the next depends
+  // on the types of the members.
+  return !GetTypeIndexedByLastIndex(ptr_input)->AsStruct();
+}
+
 Pass::Status CombineAccessChains::CombineIndices(
     Instruction* ptr_input, Instruction* inst,
     std::vector<Operand>* new_operands) {
-  analysis::DefUseManager* def_use_mgr = context()->get_def_use_mgr();
-  analysis::ConstantManager* constant_mgr = context()->get_constant_mgr();
-
-  Instruction* last_index_inst = def_use_mgr->GetDef(
-      ptr_input->GetSingleWordInOperand(ptr_input->NumInOperands() - 1));
-  const analysis::Constant* last_index_constant =
-      constant_mgr->GetConstantFromInst(last_index_inst);
-
-  Instruction* element_inst =
-      def_use_mgr->GetDef(inst->GetSingleWordInOperand(1));
-  const analysis::Constant* element_constant =
-      constant_mgr->GetConstantFromInst(element_inst);
-
-  // Combine the last index of the AccessChain (|ptr_inst|) with the element
-  // operand of the PtrAccessChain (|inst|).
-  const bool combining_element_operands =
-      IsPtrAccessChain(inst->opcode()) &&
-      IsPtrAccessChain(ptr_input->opcode()) && ptr_input->NumInOperands() == 2;
-  uint32_t new_value_id = 0;
-  const analysis::Type* type = GetIndexedType(ptr_input);
-  if (last_index_constant && element_constant) {
-    // Combine the constants.
-    uint32_t new_value = GetConstantValue(last_index_constant) +
-                         GetConstantValue(element_constant);
-    const analysis::Constant* new_value_constant =
-        constant_mgr->GetConstant(last_index_constant->type(), {new_value});
-    if (!new_value_constant) return Status::Failure;
-    Instruction* new_value_inst =
-        constant_mgr->GetDefiningInstruction(new_value_constant);
-    if (!new_value_inst) return Status::Failure;
-    new_value_id = new_value_inst->result_id();
-  } else if (!type->AsStruct() || combining_element_operands) {
-    // Generate an addition of the two indices.
-    InstructionBuilder builder(
-        context(), inst,
-        IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
-    Instruction* addition = builder.AddIAdd(last_index_inst->type_id(),
-                                            last_index_inst->result_id(),
-                                            element_inst->result_id());
-    if (!addition) return Status::Failure;
-    new_value_id = addition->result_id();
-  } else {
-    // Indexing into structs must be constant, so bail out here.
+  assert(IsPtrAccessChain(inst->opcode()));
+  if (!CanCombineLastIndexWithElement(ptr_input)) {
     return Status::SuccessWithoutChange;
   }
-  new_operands->push_back({SPV_OPERAND_TYPE_ID, {new_value_id}});
+
+  analysis::DefUseManager* def_use_mgr = context()->get_def_use_mgr();
+  Instruction* last_index_inst = def_use_mgr->GetDef(
+      ptr_input->GetSingleWordInOperand(ptr_input->NumInOperands() - 1));
+  Instruction* element_inst =
+      def_use_mgr->GetDef(inst->GetSingleWordInOperand(1));
+  InstructionBuilder builder(
+      context(), inst,
+      IRContext::kAnalysisDefUse | IRContext::kAnalysisInstrToBlockMapping);
+  Instruction* addition =
+      builder.AddIAdd(last_index_inst->type_id(), last_index_inst->result_id(),
+                      element_inst->result_id());
+  if (!addition) {
+    return Status::Failure;
+  }
+  new_operands->push_back({SPV_OPERAND_TYPE_ID, {addition->result_id()}});
   return Status::SuccessWithChange;
 }
 

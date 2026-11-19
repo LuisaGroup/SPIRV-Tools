@@ -20,6 +20,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   basic_block.h
   block_merge_pass.h
   block_merge_util.h
+  boolean_simplify_pass.h
   build_module.h
   ccp_pass.h
   cfg_cleanup_pass.h
@@ -58,6 +59,8 @@ set(SPIRV_TOOLS_OPT_SOURCES
   feature_manager.h
   fix_storage_class.h
   flatten_decoration_pass.h
+  float_div_opt_pass.h
+  fma_contraction_pass.h
   fold.h
   folding_rules.h
   fold_spec_constant_op_and_composite_pass.h
@@ -162,6 +165,7 @@ set(SPIRV_TOOLS_OPT_SOURCES
   basic_block.cpp
   block_merge_pass.cpp
   block_merge_util.cpp
+  boolean_simplify_pass.cpp
   build_module.cpp
   ccp_pass.cpp
   cfg_cleanup_pass.cpp
@@ -276,6 +280,8 @@ set(SPIRV_TOOLS_OPT_SOURCES
   spread_volatile_semantics.cpp
   ssa_rewrite_pass.cpp
   strength_reduction_pass.cpp
+  float_div_opt_pass.cpp
+  fma_contraction_pass.cpp
   strip_debug_info_pass.cpp
   strip_nonsemantic_info_pass.cpp
   struct_cfg_analysis.cpp

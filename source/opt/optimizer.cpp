@@ -892,6 +892,21 @@ Optimizer::PassToken CreateStrengthReductionPass() {
       MakeUnique<opt::StrengthReductionPass>());
 }
 
+Optimizer::PassToken CreateFmaContractionPass(bool use_khr_fma) {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::FmaContractionPass>(use_khr_fma));
+}
+
+Optimizer::PassToken CreateBooleanSimplifyPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::BooleanSimplifyPass>());
+}
+
+Optimizer::PassToken CreateFloatDivOptPass() {
+  return MakeUnique<Optimizer::PassToken::Impl>(
+      MakeUnique<opt::FloatDivOptPass>());
+}
+
 Optimizer::PassToken CreateBlockMergePass() {
   return MakeUnique<Optimizer::PassToken::Impl>(
       MakeUnique<opt::BlockMergePass>());

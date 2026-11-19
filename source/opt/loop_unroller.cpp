@@ -1195,20 +1195,68 @@ Pass::Status LoopUnroller::Process() {
     LoopDescriptor* LD = context()->GetLoopDescriptor(&f);
     for (Loop& loop : *LD) {
       LoopUtils loop_utils{context(), &loop};
-      if (!loop.HasUnrollLoopControl() || !loop_utils.CanPerformUnroll()) {
+      if (!loop_utils.CanPerformUnroll()) {
         continue;
       }
 
-      if (fully_unroll_) {
-        if (!loop_utils.FullyUnroll()) {
-          return Status::Failure;
+      if (loop.HasUnrollLoopControl()) {
+        if (fully_unroll_) {
+          if (!loop_utils.FullyUnroll()) {
+            return Status::Failure;
+          }
+          changed = true;
+        } else if (unroll_factor_ > 0) {
+          if (!loop_utils.PartiallyUnroll(unroll_factor_)) {
+            return Status::Failure;
+          }
+          changed = true;
         }
-        changed = true;
-      } else {
-        if (!loop_utils.PartiallyUnroll(unroll_factor_)) {
-          return Status::Failure;
+        continue;
+      }
+
+      // Auto-unroll mode: invoked when fully_unroll_ == false && unroll_factor_ == 0.
+      if (!fully_unroll_ && unroll_factor_ == 0) {
+        const Instruction* merge_inst = loop.GetHeaderBlock()->GetLoopMergeInst();
+        if (merge_inst && (merge_inst->GetSingleWordOperand(2) & 2u) != 0u) {
+          continue;  // Respect DontUnroll.
         }
-        changed = true;
+        const BasicBlock* cond = loop.FindConditionBlock();
+        const Instruction* ind = cond ? loop.FindConditionVariable(cond) : nullptr;
+        size_t num_iters = 0;
+        if (!ind || !loop.FindNumberOfIterations(ind, &*cond->ctail(), &num_iters)) {
+          continue;
+        }
+        if (num_iters == 0 || num_iters > 64) {
+          continue;
+        }
+        bool touches_fn_array = false;
+        size_t loop_insts = 0;
+        for (uint32_t bb_id : loop.GetBlocks()) {
+          const BasicBlock* bb = context()->cfg()->block(bb_id);
+          for (const Instruction& inst : *bb) {
+            ++loop_insts;
+            if (inst.opcode() == spv::Op::OpAccessChain ||
+                inst.opcode() == spv::Op::OpInBoundsAccessChain) {
+              uint32_t base_id = inst.GetSingleWordInOperand(0);
+              Instruction* base_def = context()->get_def_use_mgr()->GetDef(base_id);
+              if (base_def && base_def->opcode() == spv::Op::OpVariable &&
+                  base_def->GetSingleWordInOperand(0) ==
+                      static_cast<uint32_t>(spv::StorageClass::Function)) {
+                touches_fn_array = true;
+              }
+            }
+          }
+        }
+        const bool unroll_for_sroa = touches_fn_array && num_iters <= 64 &&
+                                     (num_iters * loop_insts) <= 4096;
+        const bool unroll_small = num_iters <= 32 &&
+                                  (num_iters * loop_insts) <= 2500;
+        if (unroll_for_sroa || unroll_small) {
+          if (!loop_utils.FullyUnroll()) {
+            return Status::Failure;
+          }
+          changed = true;
+        }
       }
     }
     LD->PostModificationCleanup();

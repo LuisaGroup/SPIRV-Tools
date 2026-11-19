@@ -30,9 +30,15 @@ class StrengthReductionPass : public Pass {
   Status Process() override;
 
  private:
-  // Replaces multiple by power of 2 with an equivalent bit shift.
-  // Returns true if something changed.
+  // Replaces multiply by power of 2 with an equivalent bit shift.
   Status ReplaceMultiplyByPowerOf2(BasicBlock::iterator*);
+
+  // Replaces unsigned division/modulo by power of 2 with shift / bitwise AND.
+  Status ReplaceUDivByPowerOf2(BasicBlock::iterator*);
+  Status ReplaceUModByPowerOf2(BasicBlock::iterator*);
+
+  // Get or create an arbitrary uint32 constant.
+  uint32_t GetOrCreateUintConstantId(uint32_t);
 
   // Scan the types and constants in the module looking for the integer
   // types that we are

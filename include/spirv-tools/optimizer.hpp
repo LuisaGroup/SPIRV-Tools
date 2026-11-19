@@ -360,6 +360,22 @@ Optimizer::PassToken CreateEliminateDeadConstantPass();
 // multiplying by a power of 2 can be replaced by a bit shift.
 Optimizer::PassToken CreateStrengthReductionPass();
 
+// Creates a FMA contraction pass.
+// Contracts single-use OpFMul + OpFAdd (and free-negation OpFSub) pairs
+// lacking NoContraction into OpFmaKHR (when |use_khr_fma| is true for fp32)
+// or GLSLstd450Fma.
+Optimizer::PassToken CreateFmaContractionPass(bool use_khr_fma = false);
+
+// Creates a boolean simplification pass.
+// Canonicalizes OpSelect %bool into OpLogicalAnd/Or, folds signed range
+// checks into unsigned bounds checks, and merges pow2 unsigned bounds checks.
+Optimizer::PassToken CreateBooleanSimplifyPass();
+
+// Creates a float division optimization pass.
+// Simplifies x/sqrt(y), (x/y)/sqrt(y), (a/b)/c, and factorizes common
+// non-constant denominators within a basic block into reciprocal * multiply.
+Optimizer::PassToken CreateFloatDivOptPass();
+
 // Creates a block merge pass.
 // This pass searches for blocks with a single Branch to a block with no
 // other predecessors and merges the blocks into a single block. Continue

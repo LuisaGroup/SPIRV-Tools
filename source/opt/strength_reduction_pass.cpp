@@ -170,6 +170,124 @@ uint32_t StrengthReductionPass::GetConstantId(uint32_t val) {
   return constant_ids_[val];
 }
 
+uint32_t StrengthReductionPass::GetOrCreateUintConstantId(uint32_t val) {
+  if (val <= 32 && constant_ids_[val] != 0) {
+    return constant_ids_[val];
+  }
+  if (uint32_type_id_ == 0) {
+    analysis::Integer uint(32, false);
+    uint32_type_id_ = context()->get_type_mgr()->GetTypeInstruction(&uint);
+  }
+  for (auto iter = get_module()->types_values_begin();
+       iter != get_module()->types_values_end(); ++iter) {
+    if (iter->opcode() == spv::Op::OpConstant &&
+        iter->type_id() == uint32_type_id_ &&
+        iter->GetSingleWordOperand(2) == val) {
+      if (val <= 32) constant_ids_[val] = iter->result_id();
+      return iter->result_id();
+    }
+  }
+  uint32_t resultId = TakeNextId();
+  if (resultId == 0) return 0;
+  Operand constant(spv_operand_type_t::SPV_OPERAND_TYPE_LITERAL_INTEGER, {val});
+  std::unique_ptr<Instruction> newConstant(new Instruction(
+      context(), spv::Op::OpConstant, uint32_type_id_, resultId, {constant}));
+  get_module()->AddGlobalValue(std::move(newConstant));
+  auto constantIter = --get_module()->types_values_end();
+  get_def_use_mgr()->AnalyzeInstDef(&*constantIter);
+  if (val <= 32) constant_ids_[val] = resultId;
+  return resultId;
+}
+
+Pass::Status StrengthReductionPass::ReplaceUDivByPowerOf2(
+    BasicBlock::iterator* inst) {
+  assert((*inst)->opcode() == spv::Op::OpUDiv &&
+         "Only works for unsigned integer division.");
+  if ((*inst)->type_id() != uint32_type_id_) {
+    return Status::SuccessWithoutChange;
+  }
+  uint32_t divisorId = (*inst)->GetSingleWordInOperand(1);
+  Instruction* divisorInst = get_def_use_mgr()->GetDef(divisorId);
+  if (!divisorInst || divisorInst->opcode() != spv::Op::OpConstant) {
+    return Status::SuccessWithoutChange;
+  }
+  uint32_t constVal = divisorInst->GetSingleWordOperand(2);
+  if (!IsPowerOf2(constVal)) {
+    return Status::SuccessWithoutChange;
+  }
+  if (constVal == 1u) {
+    uint32_t lhsId = (*inst)->GetSingleWordInOperand(0);
+    context()->ReplaceAllUsesWith((*inst)->result_id(), lhsId);
+    (*inst)->ToNop();
+    return Status::SuccessWithChange;
+  }
+  uint32_t shiftAmount = CountTrailingZeros(constVal);
+  uint32_t shiftConstId = GetConstantId(shiftAmount);
+  if (shiftConstId == 0) return Status::Failure;
+  uint32_t newResultId = TakeNextId();
+  if (newResultId == 0) return Status::Failure;
+  std::vector<Operand> newOperands;
+  newOperands.push_back((*inst)->GetInOperand(0));
+  newOperands.emplace_back(spv_operand_type_t::SPV_OPERAND_TYPE_ID,
+                           std::initializer_list<uint32_t>{shiftConstId});
+  std::unique_ptr<Instruction> newInstruction(
+      new Instruction(context(), spv::Op::OpShiftRightLogical,
+                      (*inst)->type_id(), newResultId, newOperands));
+  (*inst) = (*inst).InsertBefore(std::move(newInstruction));
+  get_def_use_mgr()->AnalyzeInstDefUse(&*(*inst));
+  ++(*inst);
+  context()->ReplaceAllUsesWith((*inst)->result_id(), newResultId);
+  Instruction* inst_to_delete = &*(*inst);
+  --(*inst);
+  context()->KillInst(inst_to_delete);
+  return Status::SuccessWithChange;
+}
+
+Pass::Status StrengthReductionPass::ReplaceUModByPowerOf2(
+    BasicBlock::iterator* inst) {
+  assert((*inst)->opcode() == spv::Op::OpUMod &&
+         "Only works for unsigned integer modulo.");
+  if ((*inst)->type_id() != uint32_type_id_) {
+    return Status::SuccessWithoutChange;
+  }
+  uint32_t divisorId = (*inst)->GetSingleWordInOperand(1);
+  Instruction* divisorInst = get_def_use_mgr()->GetDef(divisorId);
+  if (!divisorInst || divisorInst->opcode() != spv::Op::OpConstant) {
+    return Status::SuccessWithoutChange;
+  }
+  uint32_t constVal = divisorInst->GetSingleWordOperand(2);
+  if (!IsPowerOf2(constVal)) {
+    return Status::SuccessWithoutChange;
+  }
+  uint32_t maskVal = constVal - 1u;
+  if (constVal == 1u) {
+    uint32_t zeroId = GetConstantId(0u);
+    if (zeroId == 0) return Status::Failure;
+    context()->ReplaceAllUsesWith((*inst)->result_id(), zeroId);
+    (*inst)->ToNop();
+    return Status::SuccessWithChange;
+  }
+  uint32_t maskConstId = GetOrCreateUintConstantId(maskVal);
+  if (maskConstId == 0) return Status::Failure;
+  uint32_t newResultId = TakeNextId();
+  if (newResultId == 0) return Status::Failure;
+  std::vector<Operand> newOperands;
+  newOperands.push_back((*inst)->GetInOperand(0));
+  newOperands.emplace_back(spv_operand_type_t::SPV_OPERAND_TYPE_ID,
+                           std::initializer_list<uint32_t>{maskConstId});
+  std::unique_ptr<Instruction> newInstruction(
+      new Instruction(context(), spv::Op::OpBitwiseAnd,
+                      (*inst)->type_id(), newResultId, newOperands));
+  (*inst) = (*inst).InsertBefore(std::move(newInstruction));
+  get_def_use_mgr()->AnalyzeInstDefUse(&*(*inst));
+  ++(*inst);
+  context()->ReplaceAllUsesWith((*inst)->result_id(), newResultId);
+  Instruction* inst_to_delete = &*(*inst);
+  --(*inst);
+  context()->KillInst(inst_to_delete);
+  return Status::SuccessWithChange;
+}
+
 Pass::Status StrengthReductionPass::ScanFunctions() {
   // I did not use |ForEachInst| in the module because the function that acts on
   // the instruction gets a pointer to the instruction.  We cannot use that to
@@ -181,6 +299,18 @@ Pass::Status StrengthReductionPass::ScanFunctions() {
         switch (inst->opcode()) {
           case spv::Op::OpIMul: {
             Status s = ReplaceMultiplyByPowerOf2(&inst);
+            if (s == Status::Failure) return Status::Failure;
+            if (s == Status::SuccessWithChange) modified = true;
+            break;
+          }
+          case spv::Op::OpUDiv: {
+            Status s = ReplaceUDivByPowerOf2(&inst);
+            if (s == Status::Failure) return Status::Failure;
+            if (s == Status::SuccessWithChange) modified = true;
+            break;
+          }
+          case spv::Op::OpUMod: {
+            Status s = ReplaceUModByPowerOf2(&inst);
             if (s == Status::Failure) return Status::Failure;
             if (s == Status::SuccessWithChange) modified = true;
             break;

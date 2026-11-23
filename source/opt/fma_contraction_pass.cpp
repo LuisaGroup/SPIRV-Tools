@@ -66,7 +66,40 @@ uint32_t TryGetFreeNegatedId(IRContext* ctx, uint32_t val_id,
   const analysis::Constant* cst = const_mgr->GetConstantFromInst(def);
   if (!cst) return 0;
   if (cst->AsNullConstant()) {
-    return val_id;
+    // OpConstantNull is positive zero. Reusing it as a negated FMA operand
+    // changes signed-zero results (for example, -0 - (+0 * b) must stay -0).
+    auto make_negative_zero = [&](const analysis::Float* type) -> uint32_t {
+      if (!type) return 0;
+      std::vector<uint32_t> words(type->width() == 64 ? 2u : 1u, 0u);
+      if (type->width() == 16) {
+        words[0] = 0x8000u;
+      } else if (type->width() == 32) {
+        words[0] = 0x80000000u;
+      } else if (type->width() == 64) {
+        words[1] = 0x80000000u;
+      } else {
+        return 0;
+      }
+      const analysis::Constant* negative_zero =
+          const_mgr->GetConstant(type, std::move(words));
+      Instruction* negative_zero_inst =
+          const_mgr->GetDefiningInstruction(negative_zero);
+      return negative_zero_inst ? negative_zero_inst->result_id() : 0;
+    };
+    if (const auto* scalar_type = cst->type()->AsFloat()) {
+      return make_negative_zero(scalar_type);
+    }
+    const auto* vector_type = cst->type()->AsVector();
+    if (!vector_type) return 0;
+    uint32_t component =
+        make_negative_zero(vector_type->element_type()->AsFloat());
+    if (component == 0) return 0;
+    std::vector<uint32_t> components(vector_type->element_count(), component);
+    const analysis::Constant* negative_zero =
+        const_mgr->GetConstant(cst->type(), components);
+    Instruction* negative_zero_inst =
+        const_mgr->GetDefiningInstruction(negative_zero);
+    return negative_zero_inst ? negative_zero_inst->result_id() : 0;
   }
   if (const auto* fc = cst->AsFloatConstant()) {
     std::vector<uint32_t> words = fc->words();

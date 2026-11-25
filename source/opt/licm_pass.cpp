@@ -82,9 +82,32 @@ Pass::Status LICMPass::AnalyseAndHoistFromBB(
     Loop* loop, Function* f, BasicBlock* bb,
     std::vector<BasicBlock*>* loop_bbs) {
   bool modified = false;
+  // Speculatively hoisting a memory load or integer division/modulo out of a
+  // conditionally executed block inside a loop can trigger out-of-bounds reads
+  // or divide-by-zero when the branch would have skipped it. Only allow those
+  // ops to hoist from the loop header (which executes whenever the preheader
+  // does).
+  const bool is_loop_header = (bb == loop->GetHeaderBlock());
+  auto is_speculation_unsafe = [](const Instruction& inst) {
+    if (inst.IsLoad()) {
+      return true;
+    }
+    switch (inst.opcode()) {
+      case spv::Op::OpUDiv:
+      case spv::Op::OpSDiv:
+      case spv::Op::OpUMod:
+      case spv::Op::OpSRem:
+      case spv::Op::OpSMod:
+        return true;
+      default:
+        return false;
+    }
+  };
   std::function<bool(Instruction*)> hoist_inst =
-      [this, &loop, &modified](Instruction* inst) {
-        if (loop->ShouldHoistInstruction(*inst)) {
+      [this, &loop, &modified, is_loop_header,
+       &is_speculation_unsafe](Instruction* inst) {
+        if ((is_loop_header || !is_speculation_unsafe(*inst)) &&
+            loop->ShouldHoistInstruction(*inst)) {
           if (!HoistInstruction(loop, inst)) {
             return false;
           }
